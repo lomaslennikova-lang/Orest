@@ -24,13 +24,22 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Доступні команди:\n"
+        "/start — запустити бота\n"
+        "/about — коротко про бота\n"
+        "/help — показати цю довідку"
+    )
+
+
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(update.message.text)
 
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Не знаю такої команди. Доступні команди: /start, /about."
+        "Не знаю такої команди. Доступні команди: /start, /about, /help."
     )
 
 
@@ -44,6 +53,7 @@ def main() -> None:
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("about", about))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
