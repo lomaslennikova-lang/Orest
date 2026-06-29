@@ -1,3 +1,5 @@
+<img src="https://github.com/lomaslennikova-lang/Orest/blob/main/Orest.png" width="200">
+
 # Orest Telegram Bot
 
 Каркас Telegram-бота на Python.
