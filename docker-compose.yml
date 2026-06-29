@@ -1,6 +1,9 @@
 services:
   bot:
     build: .
+    command: python -m app.dev
     env_file:
       - .env
+    volumes:
+      - ./app:/app/app
     restart: unless-stopped

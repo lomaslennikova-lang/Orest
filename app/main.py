@@ -17,8 +17,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Вітаю! Бот запущено і готовий до роботи.")
 
 
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Orest — персональний Telegram-бот для одного користувача.\n"
+        "Наразі я вмію відповідати на /start, /about і повторювати текстові повідомлення."
+    )
+
+
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(update.message.text)
+
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Не знаю такої команди. Доступні команди: /start, /about."
+    )
 
 
 def main() -> None:
@@ -30,6 +43,8 @@ def main() -> None:
 
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("about", about))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
     logger.info("Bot started")

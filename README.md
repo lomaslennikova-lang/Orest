@@ -25,6 +25,14 @@ pip install -r requirements.txt
 python app/main.py
 ```
 
+Для запуску з автоматичним перезапуском при змінах у `app/`:
+
+```bash
+python -m app.dev
+```
+
+Якщо бот був запущений через `python app/main.py`, після зміни коду зупиніть його через `Ctrl + C` і запустіть знову.
+
 На Windows замість `source .venv/bin/activate` використайте:
 
 ```powershell
@@ -37,10 +45,19 @@ python app/main.py
 docker compose up --build
 ```
 
+У Docker Compose бот також перезапускається при змінах у `app/`.
+
+## Команди
+
+- `/start` — запустити бота
+- `/about` — коротко про бота
+
 ## Структура
 
 ```text
 app/
+  __init__.py
+  dev.py
   main.py
 requirements.txt
 .env.example
