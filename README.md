@@ -49,6 +49,10 @@ docker compose up --build
 
 У Docker Compose бот також перезапускається при змінах у `app/`.
 
+## Налагодження
+
+Файл `DEBUG.md` містить історію помилок, які виникали під час запуску бота, та їхні виправлення. Для кожної ситуації там вказано команду запуску, текст помилки, причину та спосіб виправлення.
+
 ## Команди
 
 - `/start` — запустити бота
@@ -65,6 +69,7 @@ app/
 requirements.txt
 .env.example
 .gitignore
+DEBUG.md
 README.md
 Dockerfile
 docker-compose.yml

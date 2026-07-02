@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -87,7 +88,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def main() -> None:
-    load_dotenv()
+    project_root = Path(__file__).resolve().parent.parent
+    load_dotenv(project_root / ".env")
     configure_logging()
 
     token = os.getenv("BOT_TOKEN")
