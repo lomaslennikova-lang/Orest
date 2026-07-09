@@ -60,3 +60,10 @@ class Base(DeclarativeBase):
 async def check_database_connection() -> None:
     async with async_engine.connect() as connection:
         await connection.execute(text("SELECT 1"))
+
+
+async def init_database() -> None:
+    import app.models
+
+    async with async_engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)

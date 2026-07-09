@@ -51,3 +51,33 @@ Ref: users.id < categories.user_id
 Ref: users.id < transactions.user_id
 Ref: categories.id < transactions.category_id
 ```
+
+## Telegram-команда
+
+Перша команда, яка записує дані в ці таблиці:
+
+```text
+/expense <amount> <category>
+```
+
+Приклад:
+
+```text
+/expense 12.50 food
+```
+
+Ця команда створює користувача та категорію, якщо їх ще немає, а потім додає новий запис у таблицю `transactions`.
+
+Команда для перегляду суми денних витрат за вказаний місяць:
+
+```text
+/daily_expenses <YYYY-MM>
+```
+
+Приклад:
+
+```text
+/daily_expenses 2026-07
+```
+
+Ця команда групує записи з таблиці `transactions` по днях і показує суму витрат за кожен день вибраного місяця.
