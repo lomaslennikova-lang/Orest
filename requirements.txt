@@ -2,3 +2,5 @@ python-dotenv>=1.0,<2.0
 python-telegram-bot>=21.0,<22.0
 watchfiles>=0.22,<1.0
 detect-secrets>=1.5,<2.0
+SQLAlchemy>=2.0,<3.0
+psycopg2-binary>=2.9,<3.0

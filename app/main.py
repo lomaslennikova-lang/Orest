@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+from app.database import check_database_connection
+
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,9 @@ def main() -> None:
     if not token:
         logger.error("BOT_TOKEN is not set")
         raise RuntimeError("BOT_TOKEN is not set. Add it to your .env file.")
+
+    check_database_connection()
+    logger.info("Database connection is ready")
 
     logger.info("Starting bot")
     application = Application.builder().token(token).build()
