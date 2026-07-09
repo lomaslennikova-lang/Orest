@@ -89,6 +89,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def post_init(application: Application) -> None:
+    await check_database_connection()
+    logger.info("Database connection is ready")
+
+
 def main() -> None:
     project_root = Path(__file__).resolve().parent.parent
     load_dotenv(project_root / ".env")
@@ -99,11 +104,8 @@ def main() -> None:
         logger.error("BOT_TOKEN is not set")
         raise RuntimeError("BOT_TOKEN is not set. Add it to your .env file.")
 
-    check_database_connection()
-    logger.info("Database connection is ready")
-
     logger.info("Starting bot")
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(post_init).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("about", about))
     application.add_handler(CommandHandler("help", help_command))
