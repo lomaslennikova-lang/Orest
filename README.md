@@ -82,6 +82,8 @@ detect-secrets scan --all-files --exclude-files '(\.env$|^\.venv[\\/]|^venv[\\/]
 - `/start` — запустити бота
 - `/about` — коротко про бота
 - `/help` — показати список команд
+- `/expense <amount> <category>` — додати витрату
+- `/daily_expenses <YYYY-MM>` — показати суму денних витрат за місяць
 
 ## Структура
 
