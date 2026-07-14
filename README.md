@@ -98,12 +98,14 @@ GET /api/transactions
 .\scripts\scan-secrets.ps1
 ```
 
-Скрипт виводить стислий результат: кількість знахідок і список `файл:рядок - тип`. Файли `.env`, `.venv/` і `venv/` виключено зі сканування, бо `.env` містить локальні секрети, а віртуальні середовища містять встановлені бібліотеки.
+Скрипт виводить стислий результат: кількість знахідок і список `файл:рядок - тип`.
+Для вибору файлів використовується `git ls-files --cached --others --exclude-standard`, тому сканування враховує `.gitignore` і не аналізує `.env`, `.venv/`, `venv/`, `frontend/node_modules/`, `frontend/dist/` та інші проігноровані файли.
+Додатково зі сканування виключено `.env.example`, бо це файл-приклад конфігурації.
 
-Якщо потрібен повний JSON-звіт, можна запустити `detect-secrets` напряму:
+Якщо PowerShell блокує запуск скрипта через execution policy, запустіть:
 
 ```powershell
-detect-secrets scan --all-files --exclude-files '(\.env$|^\.venv[\\/]|^venv[\\/])'
+powershell -ExecutionPolicy Bypass -File .\scripts\scan-secrets.ps1
 ```
 
 ## Команди

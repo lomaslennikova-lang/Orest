@@ -9,7 +9,28 @@ if (Test-Path $localScanner) {
     $scanner = "detect-secrets"
 }
 
-$scanJson = & $scanner scan --all-files --exclude-files '(\.env$|^\.venv[\\/]|^venv[\\/])'
+Push-Location $projectRoot
+try {
+    $gitFiles = @(
+        git ls-files --cached --others --exclude-standard
+    )
+} finally {
+    Pop-Location
+}
+
+$gitFiles = @($gitFiles | Where-Object { $_ -ne ".env.example" })
+
+if ($gitFiles.Count -eq 0) {
+    Write-Output "Secrets found: 0"
+    exit 0
+}
+
+Push-Location $projectRoot
+try {
+    $scanJson = & $scanner scan $gitFiles
+} finally {
+    Pop-Location
+}
 $scan = $scanJson | ConvertFrom-Json
 $findings = @()
 
@@ -23,17 +44,16 @@ foreach ($file in @($scan.results.PSObject.Properties)) {
     }
 }
 
-$excludedPathPattern = '(^|[\\/])(\.git|\.venv|venv|__pycache__)([\\/]|$)'
 $telegramTokenPattern = '\b\d{8,10}:[0-9A-Za-z_-]{35}\b'
-$projectRootPrefix = $projectRoot.TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
 
-Get-ChildItem $projectRoot -Recurse -File |
-    Where-Object {
-        $relativePath = $_.FullName.Substring($projectRootPrefix.Length)
-        $relativePath -ne ".env" -and $relativePath -notmatch $excludedPathPattern
-    } |
-    ForEach-Object {
-        $relativePath = $_.FullName.Substring($projectRootPrefix.Length)
+foreach ($relativePath in $gitFiles) {
+    $fullPath = Join-Path $projectRoot $relativePath
+
+    if (-not (Test-Path $fullPath)) {
+        continue
+    }
+
+    Get-Item $fullPath | Where-Object { -not $_.PSIsContainer } | ForEach-Object {
         $lineNumber = 0
 
         Get-Content $_.FullName -ErrorAction SilentlyContinue | ForEach-Object {
@@ -47,6 +67,7 @@ Get-ChildItem $projectRoot -Recurse -File |
             }
         }
     }
+}
 
 $findings = @($findings | Sort-Object Filename, LineNumber, Type -Unique)
 
