@@ -52,7 +52,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Orest - персональний Telegram-бот для одного користувача.\n"
         "Наразі я вмію відповідати на /start, /about, /help, /expense, "
-        "/daily_expenses і повторювати текстові повідомлення."
+        "/income, /daily_expenses і повторювати текстові повідомлення."
     )
 
 
@@ -64,8 +64,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/about - коротко про бота\n"
         "/help - показати цю довідку\n"
         "/expense <amount> <category> - додати витрату\n"
+        "/income <amount> <category> - додати дохід\n"
         "/daily_expenses <YYYY-MM> - сума денних витрат за місяць"
     )
+    return
 
 
 def parse_amount(value: str) -> Decimal:
@@ -139,28 +141,30 @@ async def get_or_create_category(
     return category
 
 
-async def expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info("Received /expense command %s", get_update_context(update))
-
+async def create_transaction(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    transaction_type: str,
+) -> None:
     if not update.message or not update.effective_user:
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("Приклад: /expense 12.50 food")
+        await update.message.reply_text(f"Приклад: /{transaction_type} 12.50 food")
         return
 
     try:
         amount = parse_amount(context.args[0])
     except (InvalidOperation, ValueError):
         await update.message.reply_text(
-            "Сума має бути додатним числом. Приклад: /expense 12.50 food"
+            f"Сума має бути додатним числом. Приклад: /{transaction_type} 12.50 food"
         )
         return
 
     category_name = " ".join(context.args[1:]).strip().lower()
     if not category_name:
         await update.message.reply_text(
-            "Категорія обов'язкова. Приклад: /expense 12.50 food"
+            f"Категорія обов'язкова. Приклад: /{transaction_type} 12.50 food"
         )
         return
 
@@ -171,14 +175,31 @@ async def expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             user_id=user.id,
             category_id=category.id,
             amount=amount,
+            transaction_type=transaction_type,
         )
 
         session.add(transaction)
         await session.commit()
 
+    if transaction_type == "income":
+        await update.message.reply_text(
+            f"Дохід додано: {amount} у категорії '{category_name}'."
+        )
+        return
+
     await update.message.reply_text(
         f"Витрату додано: {amount} у категорії '{category_name}'."
     )
+
+
+async def expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("Received /expense command %s", get_update_context(update))
+    await create_transaction(update, context, "expense")
+
+
+async def income(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info("Received /income command %s", get_update_context(update))
+    await create_transaction(update, context, "income")
 
 
 async def daily_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -216,6 +237,7 @@ async def daily_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             .where(
                 Transaction.user_id == user.id,
+                Transaction.transaction_type == "expense",
                 Transaction.created_at >= start_date,
                 Transaction.created_at < end_date,
             )
@@ -249,7 +271,7 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     await update.message.reply_text(
         "Не знаю такої команди. Доступні команди: /start, /about, /help, "
-        "/expense, /daily_expenses."
+        "/expense, /income, /daily_expenses."
     )
 
 
@@ -289,6 +311,7 @@ def main() -> None:
     application.add_handler(CommandHandler("about", about))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("expense", expense))
+    application.add_handler(CommandHandler("income", income))
     application.add_handler(CommandHandler("daily_expenses", daily_expenses))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
