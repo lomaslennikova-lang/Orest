@@ -1,0 +1,309 @@
+:root {
+  color: #1b2420;
+  background: #f4f6f5;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: #fbfcfb;
+  border-right: 1px solid #dde5e1;
+  padding: 20px 16px;
+}
+
+.brand {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.brand-mark {
+  align-items: center;
+  background: #146c5c;
+  border-radius: 8px;
+  color: #ffffff;
+  display: flex;
+  font-weight: 800;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.brand-name {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.brand-subtitle {
+  color: #69766f;
+  font-size: 12px;
+}
+
+.nav {
+  display: grid;
+  gap: 4px;
+}
+
+.nav a {
+  border-radius: 6px;
+  color: #56635d;
+  font-size: 14px;
+  padding: 9px 10px;
+  text-decoration: none;
+}
+
+.nav a.active {
+  background: #e7f1ee;
+  color: #146c5c;
+  font-weight: 750;
+}
+
+.workspace {
+  min-width: 0;
+  padding: 22px;
+}
+
+.topbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.topbar p,
+.panel-header span {
+  color: #69766f;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.pill {
+  border: 1px solid #dde5e1;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 750;
+  padding: 7px 10px;
+  text-transform: capitalize;
+}
+
+.pill.ready {
+  background: #e7f1ee;
+  color: #146c5c;
+}
+
+.pill.loading {
+  background: #eef2f6;
+  color: #2f5f96;
+}
+
+.pill.error,
+.notice {
+  background: #fff0f0;
+  color: #a23d3d;
+}
+
+.notice {
+  border: 1px solid #efc6c6;
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+}
+
+.metrics {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.metric,
+.panel {
+  background: #ffffff;
+  border: 1px solid #dde5e1;
+  border-radius: 8px;
+}
+
+.metric {
+  padding: 16px;
+}
+
+.metric span {
+  color: #69766f;
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  display: block;
+  font-size: 24px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.metric.income strong {
+  color: #146c5c;
+}
+
+.metric.expense strong {
+  color: #a23d3d;
+}
+
+.metric.balance strong {
+  color: #2f5f96;
+}
+
+.content-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panel-header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.table-panel {
+  min-width: 0;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  min-width: 680px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+th,
+td {
+  border-top: 1px solid #dde5e1;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  padding: 11px 8px;
+  text-align: left;
+}
+
+th {
+  color: #69766f;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.amount-cell {
+  font-weight: 800;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tag {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 4px 8px;
+  text-transform: capitalize;
+}
+
+.tag.income {
+  background: #e7f1ee;
+  color: #146c5c;
+}
+
+.tag.expense {
+  background: #fff0f0;
+  color: #a23d3d;
+}
+
+.empty-row {
+  color: #69766f;
+  text-align: center;
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-bottom: 1px solid #dde5e1;
+    border-right: 0;
+  }
+
+  .nav {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .nav a {
+    white-space: nowrap;
+  }
+
+  .metrics,
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .workspace {
+    padding: 14px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+}

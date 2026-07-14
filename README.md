@@ -49,6 +49,35 @@ docker compose up --build
 
 У Docker Compose бот також перезапускається при змінах у `app/`.
 
+## Web admin dashboard
+
+Backend API:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.api:app --reload
+```
+
+React frontend:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+API endpoints:
+
+```text
+GET /api/summary
+GET /api/transactions
+```
+
 ## Налагодження
 
 Файл `DEBUG.md` містить історію помилок, які виникали під час запуску бота, та їхні виправлення. Для кожної ситуації там вказано команду запуску, текст помилки, причину та спосіб виправлення.
