@@ -161,8 +161,27 @@ powershell -ExecutionPolicy Bypass -File .\scripts\scan-secrets.ps1
 ```text
 app/
   __init__.py
+  api.py
+  database.py
   dev.py
   main.py
+  models.py
+frontend/
+  index.html
+  package-lock.json
+  package.json
+  vite.config.js
+  src/
+    App.jsx
+    main.jsx
+    styles.css
+docs/
+  architecture.md
+  architecture_example.md
+  database.md
+  security.md
+scripts/
+  scan-secrets.ps1
 requirements.txt
 .env.example
 .gitignore
@@ -170,6 +189,5 @@ DEBUG.md
 README.md
 Dockerfile
 docker-compose.yml
-scripts/
-  scan-secrets.ps1
+Orest.png
 ```
