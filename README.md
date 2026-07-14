@@ -49,6 +49,45 @@ docker compose up --build
 
 У Docker Compose бот також перезапускається при змінах у `app/`.
 
+### Docker admin dashboard
+
+Запустити тільки web-адмінку:
+
+```bash
+docker compose up --build api frontend
+```
+
+Адмінка буде доступна за адресою:
+
+```text
+http://localhost:5173
+```
+
+API буде доступне за адресою:
+
+```text
+http://localhost:8000
+```
+
+Зупинити тільки web-адмінку:
+
+```bash
+docker compose stop api frontend
+```
+
+Зупинити всі сервіси:
+
+```bash
+docker compose down
+```
+
+У Docker Compose є кілька механізмів перезапуску:
+
+- `restart: unless-stopped` перезапускає контейнер, якщо він впав або Docker daemon був перезапущений.
+- `bot` запускається через `python -m app.dev`, тому `watchfiles` перезапускає бота при змінах у `app/`.
+- `api` запускається через `uvicorn ... --reload`, тому API перезапускається при змінах у `app/`.
+- `frontend` запускає Vite dev server, тому frontend оновлюється при змінах у `frontend/`.
+
 ## Web admin dashboard
 
 Backend API:
