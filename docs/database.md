@@ -44,6 +44,7 @@ Table transactions {
   user_id integer [not null]
   category_id integer [not null]
   amount decimal(12,2) [not null]
+  transaction_type varchar [not null]
   created_at timestamp [not null]
 }
 
@@ -66,7 +67,21 @@ Ref: categories.id < transactions.category_id
 /expense 12.50 food
 ```
 
-Ця команда створює користувача та категорію, якщо їх ще немає, а потім додає новий запис у таблицю `transactions`.
+Ця команда створює користувача та категорію, якщо їх ще немає, а потім додає новий запис у таблицю `transactions` з `transaction_type = "expense"`.
+
+Команда для запису доходу:
+
+```text
+/income <amount> <category>
+```
+
+Приклад:
+
+```text
+/income 1500 salary
+```
+
+Ця команда створює запис у таблиці `transactions` з `transaction_type = "income"`.
 
 Команда для перегляду суми денних витрат за вказаний місяць:
 

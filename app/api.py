@@ -6,22 +6,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.database import AsyncSessionLocal, check_database_connection
+from app.database import AsyncSessionLocal, check_database_connection, init_database
 from app.models import Category, Transaction, User
 
-
-INCOME_CATEGORIES = {
-    "income",
-    "salary",
-    "revenue",
-    "bonus",
-    "deposit",
-    "дохід",
-    "зарплата",
-    "прибуток",
-    "бонус",
-    "депозит",
-}
 
 app = FastAPI(title="Orest Admin API")
 
@@ -41,11 +28,10 @@ def to_float(value: Decimal | None) -> float:
     return float(value or Decimal("0.00"))
 
 
-def transaction_type(category_name: str) -> str:
-    if category_name.strip().lower() in INCOME_CATEGORIES:
-        return "income"
-
-    return "expense"
+@app.on_event("startup")
+async def startup() -> None:
+    await check_database_connection()
+    await init_database()
 
 
 @app.get("/health")
@@ -61,6 +47,7 @@ async def transactions() -> list[dict[str, object]]:
             select(
                 Transaction.id,
                 Transaction.amount,
+                Transaction.transaction_type,
                 Transaction.created_at,
                 Category.name.label("category"),
                 User.username,
@@ -75,14 +62,13 @@ async def transactions() -> list[dict[str, object]]:
 
     items = []
     for row in rows:
-        kind = transaction_type(row.category)
         amount = Decimal(row.amount or 0)
         items.append(
             {
                 "id": row.id,
                 "amount": to_float(amount.copy_abs()),
                 "category": row.category,
-                "type": kind,
+                "type": row.transaction_type,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "user": row.username or row.first_name or "unknown",
             }
@@ -95,8 +81,7 @@ async def transactions() -> list[dict[str, object]]:
 async def summary() -> dict[str, float]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Transaction.amount, Category.name)
-            .join(Category, Transaction.category_id == Category.id)
+            select(Transaction.amount, Transaction.transaction_type)
         )
         rows = result.all()
 
@@ -105,7 +90,7 @@ async def summary() -> dict[str, float]:
 
     for row in rows:
         amount = Decimal(row.amount or 0).copy_abs()
-        if transaction_type(row.name) == "income":
+        if row.transaction_type == "income":
             total_income += amount
         else:
             total_expense += amount

@@ -67,3 +67,10 @@ async def init_database() -> None:
 
     async with async_engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        await connection.execute(
+            text(
+                "ALTER TABLE transactions "
+                "ADD COLUMN IF NOT EXISTS transaction_type VARCHAR(20) "
+                "NOT NULL DEFAULT 'expense'"
+            )
+        )

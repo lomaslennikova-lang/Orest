@@ -114,6 +114,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\scan-secrets.ps1
 - `/about` — коротко про бота
 - `/help` — показати список команд
 - `/expense <amount> <category>` — додати витрату
+- `/income <amount> <category>` — додати дохід
 - `/daily_expenses <YYYY-MM>` — показати суму денних витрат за місяць
 
 ## Структура

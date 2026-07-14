@@ -51,6 +51,11 @@ class Transaction(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    transaction_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="expense",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
