@@ -79,7 +79,8 @@ select {
 }
 
 .primary-button,
-.ghost-button {
+.ghost-button,
+.danger-button {
   border-radius: 6px;
   cursor: pointer;
   font-weight: 800;
@@ -96,6 +97,13 @@ select {
   background: #ffffff;
   border: 1px solid #cdd8d3;
   color: #56635d;
+  padding: 7px 10px;
+}
+
+.danger-button {
+  background: #fff0f0;
+  border: 1px solid #efc6c6;
+  color: #a23d3d;
   padding: 7px 10px;
 }
 
@@ -145,15 +153,21 @@ select {
   gap: 4px;
 }
 
-.nav a {
+.nav a,
+.nav button {
+  background: transparent;
+  border: 0;
   border-radius: 6px;
   color: #56635d;
+  cursor: pointer;
   font-size: 14px;
   padding: 9px 10px;
+  text-align: left;
   text-decoration: none;
 }
 
-.nav a.active {
+.nav a.active,
+.nav button.active {
   background: #e7f1ee;
   color: #146c5c;
   font-weight: 750;
@@ -237,6 +251,12 @@ h2 {
   font-size: 14px;
   margin-bottom: 12px;
   padding: 12px 14px;
+}
+
+.notice.success {
+  background: #e7f1ee;
+  border-color: #bed8d1;
+  color: #146c5c;
 }
 
 .metrics {
@@ -335,6 +355,10 @@ table {
   width: 100%;
 }
 
+.edit-table {
+  min-width: 1040px;
+}
+
 th,
 td {
   border-top: 1px solid #dde5e1;
@@ -355,6 +379,69 @@ th {
   font-weight: 800;
   text-align: right;
   white-space: nowrap;
+}
+
+.actions-cell {
+  text-align: right;
+  width: 116px;
+}
+
+.create-row td {
+  background: #fbfcfb;
+  vertical-align: top;
+}
+
+.added-row td {
+  background: #edf8f2 !important;
+}
+
+.active-row td {
+  background: #fff0f0 !important;
+}
+
+.create-row input,
+.create-row select,
+.column-filter input,
+.column-filter select {
+  border: 1px solid #cdd8d3;
+  border-radius: 6px;
+  color: #1b2420;
+  min-width: 0;
+  padding: 8px 9px;
+  width: 100%;
+}
+
+.create-row input:focus,
+.create-row select:focus,
+.column-filter input:focus,
+.column-filter select:focus {
+  border-color: #146c5c;
+  outline: 3px solid #dcece8;
+}
+
+.column-filter {
+  display: grid;
+  gap: 6px;
+}
+
+.column-filter span {
+  display: block;
+}
+
+.column-filter-action {
+  justify-items: end;
+}
+
+.table-button {
+  min-width: 88px;
+  padding: 8px 10px;
+}
+
+.readonly-cell {
+  color: #56635d;
+  display: block;
+  font-weight: 750;
+  padding: 9px 0;
 }
 
 .tag {
