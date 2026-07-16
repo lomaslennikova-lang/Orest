@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -12,6 +12,19 @@ const dateFormatter = new Intl.DateTimeFormat("uk-UA", {
   timeStyle: "short",
 });
 
+const statusLabels = {
+  checking: "перевірка",
+  loading: "завантаження",
+  ready: "готово",
+  error: "помилка",
+  login: "вхід",
+};
+
+const typeLabels = {
+  income: "Дохід",
+  expense: "Витрата",
+};
+
 function formatCurrency(value) {
   return currencyFormatter.format(Number(value || 0));
 }
@@ -24,46 +37,101 @@ function formatDate(value) {
   return dateFormatter.format(new Date(value));
 }
 
+function getDateKey(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getTransactionSummary(transactions) {
+  return transactions.reduce(
+    (summary, transaction) => {
+      const amount = Number(transaction.amount || 0);
+
+      if (transaction.type === "income") {
+        summary.total_income += amount;
+      } else {
+        summary.total_expense += amount;
+      }
+
+      summary.balance = summary.total_income - summary.total_expense;
+      return summary;
+    },
+    {
+      total_income: 0,
+      total_expense: 0,
+      balance: 0,
+    },
+  );
+}
+
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [credentials, setCredentials] = useState({
     username: "admin",
     password: "",
   });
-  const [summary, setSummary] = useState({
-    total_income: 0,
-    total_expense: 0,
-    balance: 0,
-  });
   const [transactions, setTransactions] = useState([]);
+  const [filters, setFilters] = useState({
+    dateFrom: "",
+    dateTo: "",
+    type: "",
+    user: "",
+  });
   const [status, setStatus] = useState("checking");
   const [error, setError] = useState("");
+
+  const userOptions = useMemo(() => {
+    return [...new Set(transactions.map((transaction) => transaction.user))].sort(
+      (firstUser, secondUser) => firstUser.localeCompare(secondUser, "uk"),
+    );
+  }, [transactions]);
+
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter((transaction) => {
+      const transactionDate = getDateKey(transaction.created_at);
+      const matchesDateFrom =
+        !filters.dateFrom || (transactionDate && transactionDate >= filters.dateFrom);
+      const matchesDateTo =
+        !filters.dateTo || (transactionDate && transactionDate <= filters.dateTo);
+      const matchesType = !filters.type || transaction.type === filters.type;
+      const matchesUser = !filters.user || transaction.user === filters.user;
+
+      return matchesDateFrom && matchesDateTo && matchesType && matchesUser;
+    });
+  }, [filters, transactions]);
+
+  const summary = useMemo(
+    () => getTransactionSummary(filteredTransactions),
+    [filteredTransactions],
+  );
 
   async function loadDashboard() {
     try {
       setStatus("loading");
 
-      const [summaryResponse, transactionsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/summary`, { credentials: "include" }),
-        fetch(`${API_BASE_URL}/api/transactions`, { credentials: "include" }),
-      ]);
+      const response = await fetch(`${API_BASE_URL}/api/transactions`, {
+        credentials: "include",
+      });
 
-      if (summaryResponse.status === 401 || transactionsResponse.status === 401) {
+      if (response.status === 401) {
         setCurrentUser(null);
         setStatus("login");
         return;
       }
 
-      if (!summaryResponse.ok || !transactionsResponse.ok) {
+      if (!response.ok) {
         throw new Error("Не вдалося завантажити дані API.");
       }
 
-      const [summaryData, transactionsData] = await Promise.all([
-        summaryResponse.json(),
-        transactionsResponse.json(),
-      ]);
+      const transactionsData = await response.json();
 
-      setSummary(summaryData);
       setTransactions(transactionsData);
       setStatus("ready");
       setError("");
@@ -148,6 +216,22 @@ function App() {
     setStatus("login");
   }
 
+  function updateFilter(name, value) {
+    setFilters((previousFilters) => ({
+      ...previousFilters,
+      [name]: value,
+    }));
+  }
+
+  function resetFilters() {
+    setFilters({
+      dateFrom: "",
+      dateTo: "",
+      type: "",
+      user: "",
+    });
+  }
+
   if (status === "login" || (!currentUser && status !== "checking" && status !== "error")) {
     return (
       <main className="login-shell">
@@ -206,27 +290,27 @@ function App() {
           <div className="brand-mark">O</div>
           <div>
             <div className="brand-name">Orest</div>
-            <div className="brand-subtitle">Admin</div>
+            <div className="brand-subtitle">Адмінка</div>
           </div>
         </div>
 
-        <nav className="nav">
+        <nav className="nav" aria-label="Розділи адмінки">
           <a className="active" href="/">
-            Dashboard
+            Фінансовий стан
           </a>
-          <a href={`${API_BASE_URL}/api/summary`}>Summary API</a>
-          <a href={`${API_BASE_URL}/api/transactions`}>Transactions API</a>
         </nav>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <div>
-            <h1>Finance operations</h1>
-            <p>Neon database</p>
+            <h1>Фінансовий стан</h1>
+            <p>Дані станом на поточний момент</p>
           </div>
           <div className="topbar-actions">
-            <span className={`pill ${status}`}>{status}</span>
+            <span className={`pill ${status}`}>
+              {statusLabels[status] || status}
+            </span>
             <button className="ghost-button" type="button" onClick={handleLogout}>
               Вийти
             </button>
@@ -235,58 +319,112 @@ function App() {
 
         {status === "error" ? <div className="notice">{error}</div> : null}
 
-        <section className="metrics" aria-label="Summary">
+        <section className="metrics" aria-label="Загальні дані">
           <article className="metric income">
-            <span>Total income</span>
+            <span>Доходи</span>
             <strong>{formatCurrency(summary.total_income)}</strong>
           </article>
           <article className="metric expense">
-            <span>Total expense</span>
+            <span>Витрати</span>
             <strong>{formatCurrency(summary.total_expense)}</strong>
           </article>
           <article className="metric balance">
-            <span>Balance</span>
+            <span>Баланс</span>
             <strong>{formatCurrency(summary.balance)}</strong>
           </article>
         </section>
 
         <section className="content-grid">
+          <article className="panel filters-panel">
+            <div className="panel-header">
+              <h2>Фільтри</h2>
+              <button className="ghost-button" type="button" onClick={resetFilters}>
+                Скинути
+              </button>
+            </div>
+            <div className="filter-grid">
+              <label>
+                Дата з
+                <input
+                  max={filters.dateTo || undefined}
+                  type="date"
+                  value={filters.dateFrom}
+                  onChange={(event) => updateFilter("dateFrom", event.target.value)}
+                />
+              </label>
+              <label>
+                Дата по
+                <input
+                  min={filters.dateFrom || undefined}
+                  type="date"
+                  value={filters.dateTo}
+                  onChange={(event) => updateFilter("dateTo", event.target.value)}
+                />
+              </label>
+              <label>
+                Тип
+                <select
+                  value={filters.type}
+                  onChange={(event) => updateFilter("type", event.target.value)}
+                >
+                  <option value="">Усі типи</option>
+                  <option value="income">Дохід</option>
+                  <option value="expense">Витрата</option>
+                </select>
+              </label>
+              <label>
+                Користувач
+                <select
+                  value={filters.user}
+                  onChange={(event) => updateFilter("user", event.target.value)}
+                >
+                  <option value="">Усі користувачі</option>
+                  {userOptions.map((user) => (
+                    <option key={user} value={user}>
+                      {user}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </article>
+
           <article className="panel table-panel">
             <div className="panel-header">
               <h2>Transactions</h2>
-              <span>{transactions.length} rows</span>
+              <span>{filteredTransactions.length} записів</span>
             </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Category</th>
-                    <th>User</th>
-                    <th>Type</th>
-                    <th className="amount-cell">Amount</th>
+                    <th>Дата</th>
+                    <th className="amount-cell">Сума</th>
+                    <th>Категорія</th>
+                    <th>Тип</th>
+                    <th>Користувач</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {transactions.map((transaction) => (
+                  {filteredTransactions.map((transaction) => (
                     <tr key={transaction.id}>
                       <td>{formatDate(transaction.created_at)}</td>
-                      <td>{transaction.category}</td>
-                      <td>{transaction.user}</td>
-                      <td>
-                        <span className={`tag ${transaction.type}`}>
-                          {transaction.type}
-                        </span>
-                      </td>
                       <td className="amount-cell">
                         {formatCurrency(transaction.amount)}
                       </td>
+                      <td>{transaction.category}</td>
+                      <td>
+                        <span className={`tag ${transaction.type}`}>
+                          {typeLabels[transaction.type] || transaction.type}
+                        </span>
+                      </td>
+                      <td>{transaction.user}</td>
                     </tr>
                   ))}
-                  {!transactions.length ? (
+                  {!filteredTransactions.length ? (
                     <tr>
                       <td className="empty-row" colSpan="5">
-                        No transactions
+                        Немає транзакцій за вибраними фільтрами
                       </td>
                     </tr>
                   ) : null}
