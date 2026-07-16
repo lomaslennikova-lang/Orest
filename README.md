@@ -90,6 +90,16 @@ docker compose down
 
 ## Web admin dashboard
 
+Перед запуском web-адмінки додайте облікові дані адміністратора у `.env`:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your_admin_password_here
+ADMIN_SESSION_SECRET=your_long_random_session_secret_here
+```
+
+`ADMIN_PASSWORD` - пароль для форми входу. `ADMIN_SESSION_SECRET` використовується API для підпису cookie-сесії адміністратора, тому зберігайте його приватно і не додавайте в git.
+
 Backend API:
 
 ```powershell
@@ -113,6 +123,9 @@ http://localhost:5173
 API endpoints:
 
 ```text
+POST /api/login
+POST /api/logout
+GET /api/me
 GET /api/summary
 GET /api/transactions
 ```

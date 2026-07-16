@@ -18,6 +18,82 @@ a {
   color: inherit;
 }
 
+button,
+input {
+  font: inherit;
+}
+
+.login-shell {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 22px;
+}
+
+.login-card {
+  background: #ffffff;
+  border: 1px solid #dde5e1;
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  max-width: 380px;
+  padding: 22px;
+  width: 100%;
+}
+
+.login-brand {
+  margin-bottom: 0;
+}
+
+.login-card p {
+  color: #69766f;
+  font-size: 14px;
+  margin-top: 6px;
+}
+
+.login-card label {
+  color: #56635d;
+  display: grid;
+  font-size: 13px;
+  font-weight: 750;
+  gap: 6px;
+}
+
+.login-card input {
+  border: 1px solid #cdd8d3;
+  border-radius: 6px;
+  color: #1b2420;
+  padding: 10px 11px;
+  width: 100%;
+}
+
+.login-card input:focus {
+  border-color: #146c5c;
+  outline: 3px solid #dcece8;
+}
+
+.primary-button,
+.ghost-button {
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.primary-button {
+  background: #146c5c;
+  border: 1px solid #146c5c;
+  color: #ffffff;
+  padding: 10px 12px;
+}
+
+.ghost-button {
+  background: #ffffff;
+  border: 1px solid #cdd8d3;
+  color: #56635d;
+  padding: 7px 10px;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -90,6 +166,12 @@ a {
   margin-bottom: 16px;
 }
 
+.topbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 h1,
 h2,
 p {
@@ -129,6 +211,11 @@ h2 {
 }
 
 .pill.loading {
+  background: #eef2f6;
+  color: #2f5f96;
+}
+
+.pill.checking {
   background: #eef2f6;
   color: #2f5f96;
 }
@@ -305,5 +392,10 @@ th {
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .topbar-actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
