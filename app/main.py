@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from calendar import monthrange
@@ -12,6 +13,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.database import AsyncSessionLocal, check_database_connection, init_database
+from app.llm import check_llm_connection
 from app.models import Category, Transaction, User
 
 
@@ -293,6 +295,12 @@ async def post_init(application: Application) -> None:
     await check_database_connection()
     await init_database()
     logger.info("Database connection is ready")
+
+    llm_status = await asyncio.to_thread(check_llm_connection)
+    if llm_status.available:
+        logger.info(llm_status.message)
+    else:
+        logger.warning(llm_status.message)
 
 
 def main() -> None:
