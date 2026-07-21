@@ -126,6 +126,9 @@ function App() {
   const [editMessage, setEditMessage] = useState("");
   const [addedTransactionId, setAddedTransactionId] = useState(null);
   const [activeTransactionId, setActiveTransactionId] = useState(null);
+  const [financialAnalysis, setFinancialAnalysis] = useState(null);
+  const [analysisStatus, setAnalysisStatus] = useState("idle");
+  const [analysisError, setAnalysisError] = useState("");
 
   const isAdmin = currentUser?.role === "admin";
   const currentDateTimeLocal = getCurrentDateTimeLocal();
@@ -157,6 +160,11 @@ function App() {
     [filteredFinanceTransactions],
   );
 
+  const hasExpenseTransactions = useMemo(
+    () => filteredFinanceTransactions.some((transaction) => transaction.type === "expense"),
+    [filteredFinanceTransactions],
+  );
+
   async function loadDashboard() {
     try {
       setStatus("loading");
@@ -178,6 +186,9 @@ function App() {
       const transactionsData = await response.json();
 
       setTransactions(transactionsData);
+      setFinancialAnalysis(null);
+      setAnalysisError("");
+      setAnalysisStatus("idle");
       setStatus("ready");
       setError("");
     } catch (loadError) {
@@ -263,10 +274,20 @@ function App() {
   }
 
   function updateFilter(setFilter, name, value) {
+    if (analysisStatus === "loading") {
+      return;
+    }
+
     setFilter((previousFilters) => ({
       ...previousFilters,
       [name]: value,
     }));
+
+    if (setFilter === setFinanceFilters) {
+      setFinancialAnalysis(null);
+      setAnalysisError("");
+      setAnalysisStatus("idle");
+    }
   }
 
   function updateNewTransaction(name, value) {
@@ -391,6 +412,51 @@ function App() {
     }
   }
 
+  async function handleAnalyzeTransactions() {
+    if (!hasExpenseTransactions) {
+      return;
+    }
+
+    try {
+      setAnalysisStatus("loading");
+      setAnalysisError("");
+      setFinancialAnalysis(null);
+
+      const response = await fetch(`${API_BASE_URL}/api/ai/analyze-transactions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          date_from: financeFilters.dateFrom || null,
+          date_to: financeFilters.dateTo || null,
+          transaction_type: financeFilters.type || null,
+          user: financeFilters.user || null,
+        }),
+      });
+
+      if (!response.ok) {
+        let message = "Не вдалося виконати аналіз фінансового стану.";
+        try {
+          const data = await response.json();
+          if (data.detail) {
+            message = data.detail;
+          }
+        } catch {
+          // Keep the fallback message when the API does not return JSON.
+        }
+        throw new Error(message);
+      }
+
+      setFinancialAnalysis(await response.json());
+      setAnalysisStatus("ready");
+    } catch (analysisRequestError) {
+      setAnalysisStatus("error");
+      setAnalysisError(analysisRequestError.message);
+    }
+  }
+
   if (status === "login" || (!currentUser && status !== "checking" && status !== "error")) {
     return (
       <main className="login-shell">
@@ -512,6 +578,61 @@ function App() {
               </article>
             </section>
 
+            <section className="panel analysis-action-panel">
+              <div>
+                <h2>AI-аналіз</h2>
+                <p>Аналізуються транзакції відповідно до активних фільтрів.</p>
+                {!hasExpenseTransactions ? (
+                  <p className="analysis-requirement">
+                    Для аналізу потрібна щонайменше одна витрата.
+                  </p>
+                ) : null}
+              </div>
+              <button
+                className={`primary-button analysis-button ${
+                  analysisStatus === "loading"
+                    ? "is-loading"
+                    : !hasExpenseTransactions
+                      ? "is-unavailable"
+                      : ""
+                }`}
+                disabled={analysisStatus === "loading" || !hasExpenseTransactions}
+                type="button"
+                onClick={handleAnalyzeTransactions}
+              >
+                {analysisStatus === "loading"
+                  ? "⌛ Аналізуємо…"
+                  : !hasExpenseTransactions
+                    ? "🔒 Аналіз недоступний"
+                    : "✨ Аналіз фінансового стану"}
+              </button>
+            </section>
+
+            {analysisError ? <div className="notice">{analysisError}</div> : null}
+
+            {financialAnalysis ? (
+              <section className="analysis-grid" aria-label="Результати AI-аналізу">
+                <AnalysisCard title="Висновок">
+                  <p>{financialAnalysis.summary}</p>
+                </AnalysisCard>
+                <AnalysisCard title="Топ категорій витрат">
+                  <AnalysisList
+                    items={financialAnalysis.top_expense_categories}
+                    emptyText="Витрат за вибраними фільтрами немає."
+                  />
+                </AnalysisCard>
+                <AnalysisCard title="Ризики">
+                  <AnalysisList
+                    items={financialAnalysis.risks}
+                    emptyText="Можливих ризиків не виявлено."
+                  />
+                </AnalysisCard>
+                <AnalysisCard title="Поради">
+                  <AnalysisList items={financialAnalysis.advice} />
+                </AnalysisCard>
+              </section>
+            ) : null}
+
             <section className="content-grid">
               <article className="panel filters-panel">
                 <div className="panel-header">
@@ -519,7 +640,13 @@ function App() {
                   <button
                     className="ghost-button"
                     type="button"
-                    onClick={() => setFinanceFilters(emptyFilters)}
+                    disabled={analysisStatus === "loading"}
+                    onClick={() => {
+                      setFinanceFilters(emptyFilters);
+                      setFinancialAnalysis(null);
+                      setAnalysisError("");
+                      setAnalysisStatus("idle");
+                    }}
                   >
                     Скинути
                   </button>
@@ -531,6 +658,7 @@ function App() {
                       max={financeFilters.dateTo || undefined}
                       type="date"
                       value={financeFilters.dateFrom}
+                      disabled={analysisStatus === "loading"}
                       onChange={(event) =>
                         updateFilter(setFinanceFilters, "dateFrom", event.target.value)
                       }
@@ -542,6 +670,7 @@ function App() {
                       min={financeFilters.dateFrom || undefined}
                       type="date"
                       value={financeFilters.dateTo}
+                      disabled={analysisStatus === "loading"}
                       onChange={(event) =>
                         updateFilter(setFinanceFilters, "dateTo", event.target.value)
                       }
@@ -551,6 +680,7 @@ function App() {
                     Тип
                     <select
                       value={financeFilters.type}
+                      disabled={analysisStatus === "loading"}
                       onChange={(event) =>
                         updateFilter(setFinanceFilters, "type", event.target.value)
                       }
@@ -564,6 +694,7 @@ function App() {
                     Користувач
                     <select
                       value={financeFilters.user}
+                      disabled={analysisStatus === "loading"}
                       onChange={(event) =>
                         updateFilter(setFinanceFilters, "user", event.target.value)
                       }
@@ -784,6 +915,29 @@ function App() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+function AnalysisCard({ title, children }) {
+  return (
+    <article className="panel analysis-card">
+      <h2>{title}</h2>
+      <div className="analysis-content">{children}</div>
+    </article>
+  );
+}
+
+function AnalysisList({ items, emptyText = "Немає даних." }) {
+  if (!items.length) {
+    return <p>{emptyText}</p>;
+  }
+
+  return (
+    <ul>
+      {items.map((item, index) => (
+        <li key={`${item}-${index}`}>{item}</li>
+      ))}
+    </ul>
   );
 }
 

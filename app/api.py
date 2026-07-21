@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import or_, select
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import func, or_, select
 
 from app.database import AsyncSessionLocal, check_database_connection, init_database
+from app.llm import LLMRequestError, analyze_transactions
 from app.models import Category, Transaction, User
 
 
@@ -44,6 +47,20 @@ class TransactionCreateRequest(BaseModel):
     amount: Decimal
     category: str
     type: str
+
+
+class TransactionAnalysisRequest(BaseModel):
+    date_from: date | None = None
+    date_to: date | None = None
+    transaction_type: Literal["income", "expense"] | None = None
+    user: str | None = Field(default=None, max_length=255)
+
+
+class FinancialAnalysisResponse(BaseModel):
+    summary: str = Field(min_length=1, max_length=2000)
+    top_expense_categories: list[str] = Field(max_length=5)
+    risks: list[str] = Field(max_length=10)
+    advice: list[str] = Field(min_length=3, max_length=3)
 
 
 def to_float(value: Decimal | None) -> float:
@@ -138,6 +155,47 @@ def serialize_transaction(row) -> dict[str, object]:
         "type": row.transaction_type,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "user": row.username or row.first_name or "unknown",
+    }
+
+
+def build_analysis_data(rows) -> dict[str, object]:
+    """Aggregate database rows before sending financial data to Gemini."""
+    total_income = Decimal("0.00")
+    total_expense = Decimal("0.00")
+    expense_categories: dict[str, Decimal] = {}
+    transaction_dates = [row.created_at.date() for row in rows if row.created_at]
+
+    for row in rows:
+        amount = Decimal(row.amount or 0).copy_abs()
+        if row.transaction_type == "income":
+            total_income += amount
+            continue
+
+        total_expense += amount
+        expense_categories[row.category] = expense_categories.get(
+            row.category,
+            Decimal("0.00"),
+        ) + amount
+
+    categories = sorted(
+        expense_categories.items(),
+        key=lambda category: category[1],
+        reverse=True,
+    )
+    return {
+        "currency": "UAH",
+        "transactions_count": len(rows),
+        "period": {
+            "from": min(transaction_dates).isoformat() if transaction_dates else None,
+            "to": max(transaction_dates).isoformat() if transaction_dates else None,
+        },
+        "total_income": to_float(total_income),
+        "total_expense": to_float(total_expense),
+        "balance": to_float(total_income - total_expense),
+        "expense_categories": [
+            {"category": category, "amount": to_float(amount)}
+            for category, amount in categories
+        ],
     }
 
 
@@ -305,6 +363,72 @@ async def transactions(
         rows = result.all()
 
     return [serialize_transaction(row) for row in rows]
+
+
+@app.post(
+    "/api/ai/analyze-transactions",
+    response_model=FinancialAnalysisResponse,
+)
+async def analyze_financial_transactions(
+    filters: TransactionAnalysisRequest | None = None,
+    _session: dict[str, object] = Depends(require_admin),
+) -> FinancialAnalysisResponse:
+    """Generate an AI financial overview from the selected database records."""
+    filters = filters or TransactionAnalysisRequest()
+    query = (
+        select(
+            Transaction.amount,
+            Transaction.transaction_type,
+            Transaction.created_at,
+            Category.name.label("category"),
+        )
+        .join(Category, Transaction.category_id == Category.id)
+        .join(User, Transaction.user_id == User.id)
+    )
+
+    if filters.date_from:
+        query = query.where(Transaction.created_at >= filters.date_from)
+    if filters.date_to:
+        query = query.where(func.date(Transaction.created_at) <= filters.date_to)
+    if filters.transaction_type:
+        query = query.where(Transaction.transaction_type == filters.transaction_type)
+    if filters.user:
+        query = query.where(
+            or_(
+                User.username == filters.user,
+                User.first_name == filters.user,
+            )
+        )
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(query.order_by(Transaction.created_at.desc()))
+        rows = result.all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No transactions match the selected filters.",
+        )
+
+    if not any(row.transaction_type == "expense" for row in rows):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one expense transaction is required for financial analysis.",
+        )
+
+    try:
+        analysis = await asyncio.to_thread(analyze_transactions, build_analysis_data(rows))
+        return FinancialAnalysisResponse.model_validate(analysis)
+    except LLMRequestError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Gemini returned an unexpected analysis format.",
+        ) from error
 
 
 @app.post("/api/transactions", status_code=status.HTTP_201_CREATED)

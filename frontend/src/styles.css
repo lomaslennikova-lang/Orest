@@ -93,6 +93,11 @@ select {
   padding: 10px 12px;
 }
 
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
 .ghost-button {
   background: #ffffff;
   border: 1px solid #cdd8d3;
@@ -310,6 +315,66 @@ h2 {
   grid-template-columns: 1fr;
 }
 
+.analysis-action-panel {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.analysis-action-panel p,
+.analysis-content p,
+.analysis-content li {
+  color: #56635d;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.analysis-action-panel p {
+  margin-top: 4px;
+}
+
+.analysis-requirement {
+  color: #a23d3d !important;
+  font-weight: 750;
+}
+
+.analysis-button.is-loading {
+  background: #2f5f96;
+  border-color: #2f5f96;
+  cursor: wait;
+}
+
+.analysis-button.is-unavailable {
+  background: #8a9691;
+  border-color: #8a9691;
+}
+
+.analysis-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.analysis-card h2 {
+  color: #146c5c;
+}
+
+.analysis-content {
+  margin-top: 10px;
+}
+
+.analysis-content ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.analysis-content li + li {
+  margin-top: 6px;
+}
+
 .panel {
   padding: 16px;
 }
@@ -489,8 +554,14 @@ th {
 
   .metrics,
   .content-grid,
+  .analysis-grid,
   .filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .analysis-action-panel {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

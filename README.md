@@ -148,6 +148,7 @@ GET /api/summary
 GET /api/transactions
 POST /api/transactions
 DELETE /api/transactions/{transaction_id}
+POST /api/ai/analyze-transactions
 ```
 
 ## Налагодження
@@ -180,6 +181,31 @@ DELETE /api/transactions/{transaction_id}
 powershell -ExecutionPolicy Bypass -File .\scripts\scan-secrets.ps1
 ```
 
+## Перевірка LLM
+
+Для використання Gemini додайте ключ до `.env`:
+
+```env
+LLM_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-flash-latest
+```
+
+Під час запуску Telegram-бот перевіряє доступність Gemini та записує результат у лог. Недоступність LLM не зупиняє бот: це дозволяє використовувати інші його можливості, поки ключ або мережа налаштовуються.
+
+Адмінка має кнопку `Аналіз фінансового стану` на вкладці `Фінансовий стан`. Вона аналізує записи, що відповідають активним фільтрам, і блокується до отримання відповіді. Дані агрегуються backend-ом, а Gemini повертає структурований JSON з полями `summary`, `top_expense_categories`, `risks` та `advice`. Шаблон промпту збережений у `app/prompts.py`.
+
+Для ручної перевірки з кореня проєкту виконайте:
+
+```powershell
+.\scripts\check-llm.ps1
+```
+
+Якщо PowerShell блокує запуск скрипта через execution policy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check-llm.ps1
+```
+
 ## Команди
 
 - `/start` — запустити бота
@@ -197,8 +223,10 @@ app/
   api.py
   database.py
   dev.py
+  llm.py
   main.py
   models.py
+  prompts.py
 frontend/
   index.html
   package-lock.json
@@ -214,6 +242,7 @@ docs/
   database.md
   security.md
 scripts/
+  check-llm.ps1
   scan-secrets.ps1
 requirements.txt
 .env.example
