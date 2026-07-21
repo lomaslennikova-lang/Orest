@@ -148,6 +148,7 @@ GET /api/summary
 GET /api/transactions
 POST /api/transactions
 DELETE /api/transactions/{transaction_id}
+POST /api/ai/analyze-transactions
 ```
 
 ## Налагодження
@@ -186,9 +187,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\scan-secrets.ps1
 
 ```env
 LLM_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-flash-latest
 ```
 
 Під час запуску Telegram-бот перевіряє доступність Gemini та записує результат у лог. Недоступність LLM не зупиняє бот: це дозволяє використовувати інші його можливості, поки ключ або мережа налаштовуються.
+
+Адмінка має кнопку `Аналіз фінансового стану` на вкладці `Фінансовий стан`. Вона аналізує записи, що відповідають активним фільтрам, і блокується до отримання відповіді. Дані агрегуються backend-ом, а Gemini повертає структурований JSON з полями `summary`, `top_expense_categories`, `risks` та `advice`. Шаблон промпту збережений у `app/prompts.py`.
 
 Для ручної перевірки з кореня проєкту виконайте:
 
@@ -222,6 +226,7 @@ app/
   llm.py
   main.py
   models.py
+  prompts.py
 frontend/
   index.html
   package-lock.json
