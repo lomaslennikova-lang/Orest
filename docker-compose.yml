@@ -6,6 +6,7 @@ services:
       - .env
     volumes:
       - ./app:/app/app
+      - ./promts:/app/promts:ro
     restart: unless-stopped
 
   api:
@@ -17,6 +18,7 @@ services:
       - "8000:8000"
     volumes:
       - ./app:/app/app
+      - ./promts:/app/promts:ro
     restart: unless-stopped
 
   frontend:
