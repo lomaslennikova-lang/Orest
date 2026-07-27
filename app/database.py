@@ -66,7 +66,16 @@ async def init_database() -> None:
     import app.models
 
     async with async_engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+        # The legacy tables predate Alembic. Keep their bootstrap behaviour,
+        # but create AI-chat tables only through a versioned migration.
+        await connection.run_sync(
+            Base.metadata.create_all,
+            tables=[
+                app.models.User.__table__,
+                app.models.Category.__table__,
+                app.models.Transaction.__table__,
+            ],
+        )
         await connection.execute(
             text(
                 "ALTER TABLE transactions "
