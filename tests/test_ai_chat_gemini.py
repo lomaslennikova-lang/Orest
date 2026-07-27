@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.ai_chat.gemini import AIChatLLMError, _parse_turn
+from app.ai_chat.gemini import AIChatLLMError, _function_declarations, _parse_turn
 
 
 class GeminiTurnParsingTests(unittest.TestCase):
@@ -35,3 +35,9 @@ class GeminiTurnParsingTests(unittest.TestCase):
     def test_rejects_response_without_text_or_tools(self):
         with self.assertRaises(AIChatLLMError):
             _parse_turn({"candidates": [{"content": {"parts": [{}]}}]})
+
+    def test_function_schemas_exclude_gemini_unsupported_fields(self):
+        declarations = _function_declarations()
+        self.assertTrue(declarations)
+        for declaration in declarations:
+            self.assertNotIn("additionalProperties", declaration["parameters"])

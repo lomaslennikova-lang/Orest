@@ -39,10 +39,25 @@ def _function_declarations() -> list[dict[str, Any]]:
         {
             "name": tool.name,
             "description": tool.description,
-            "parameters": tool.json_schema,
+            "parameters": _to_gemini_schema(tool.json_schema),
         }
         for tool in FINANCIAL_TOOLS.values()
     ]
+
+
+def _to_gemini_schema(schema: Any) -> Any:
+    """Remove JSON Schema fields unsupported by Gemini function declarations."""
+
+    if isinstance(schema, list):
+        return [_to_gemini_schema(value) for value in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    return {
+        key: _to_gemini_schema(value)
+        for key, value in schema.items()
+        if key != "additionalProperties"
+    }
 
 
 def _parse_turn(payload: dict[str, Any]) -> GeminiTurn:
