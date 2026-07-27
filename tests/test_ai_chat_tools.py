@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.ai_chat.schemas import (
     CategoryTotalsParams,
+    ChatRequest,
     PeriodComparisonParams,
     TransactionsSummaryParams,
 )
@@ -110,6 +111,11 @@ class FinancialToolsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ToolContractTests(unittest.TestCase):
+    def test_chat_request_strips_message_and_rejects_blank_text(self):
+        self.assertEqual(ChatRequest(message="  Покажи витрати  ").message, "Покажи витрати")
+        with self.assertRaises(ValidationError):
+            ChatRequest(message="   ")
+
     def test_registry_exposes_only_planned_read_only_tools(self):
         self.assertEqual(
             set(FINANCIAL_TOOLS),

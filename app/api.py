@@ -7,21 +7,41 @@ import hmac
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import Any, AsyncIterator, Literal
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
+from app.ai_chat.graph import open_chat_graph, run_chat_turn
+from app.ai_chat.repository import (
+    add_message,
+    create_conversation,
+    get_last_owned_conversation,
+    get_owned_conversation,
+    get_recent_messages,
+)
+from app.ai_chat.schemas import ChatMessageCreate, ChatMessageView, ChatRequest, ChatResponse, ConversationView
 from app.database import AsyncSessionLocal, check_database_connection, init_database
 from app.llm import LLMRequestError, analyze_transactions
 from app.models import Category, Transaction, User
 
 
-app = FastAPI(title="Orest Admin API")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    await check_database_connection()
+    await init_database()
+    async with open_chat_graph() as graph:
+        app.state.ai_chat_graph = graph
+        yield
+
+
+app = FastAPI(title="Orest Admin API", lifespan=lifespan)
 SESSION_COOKIE_NAME = "orest_admin_session"
 SESSION_TTL_SECONDS = 60 * 60 * 8
 
@@ -286,12 +306,6 @@ def validate_transaction_payload(payload: TransactionCreateRequest) -> None:
         )
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    await check_database_connection()
-    await init_database()
-
-
 @app.get("/health")
 async def health() -> dict[str, str]:
     await check_database_connection()
@@ -338,6 +352,145 @@ async def me(session: dict[str, object] = Depends(require_admin)) -> dict[str, o
         "username": session["username"],
         "role": session["role"],
     }
+
+
+def serialize_chat_message(message) -> ChatMessageView:
+    return ChatMessageView(
+        id=message.id,
+        conversation_id=message.conversation_id,
+        role=message.role,
+        content=message.content,
+        tool_name=message.tool_name,
+        tool_call_id=message.tool_call_id,
+        status=message.status,
+        created_at=message.created_at,
+    )
+
+
+def serialize_conversation(conversation) -> ConversationView:
+    return ConversationView(
+        id=conversation.id,
+        owner_user_id=conversation.owner_user_id,
+        title=conversation.title,
+        updated_at=conversation.updated_at,
+    )
+
+
+async def get_admin_chat_user(session, admin_session: dict[str, object]) -> User:
+    return await get_or_create_admin_user(session, str(admin_session["username"]))
+
+
+@app.post("/api/ai/chat", response_model=ChatResponse)
+async def ai_chat(
+    payload: ChatRequest,
+    request: Request,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ChatResponse:
+    """Persist a user message, run its durable graph thread, and save the answer."""
+
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        if payload.conversation_id:
+            conversation = await get_owned_conversation(
+                session,
+                conversation_id=payload.conversation_id,
+                owner_user_id=admin_user.id,
+            )
+            if not conversation:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found.")
+        else:
+            conversation = await get_last_owned_conversation(
+                session,
+                owner_user_id=admin_user.id,
+            )
+            if not conversation:
+                conversation = await create_conversation(
+                    session,
+                    owner_user_id=admin_user.id,
+                )
+
+        await add_message(
+            session,
+            conversation=conversation,
+            payload=ChatMessageCreate(role="user", content=payload.message),
+        )
+        conversation_id = conversation.id
+        await session.commit()
+
+    answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
+
+    async with AsyncSessionLocal() as session:
+        conversation = await get_owned_conversation(
+            session,
+            conversation_id=conversation_id,
+            owner_user_id=admin_user.id,
+        )
+        if not conversation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found.")
+        assistant_message = await add_message(
+            session,
+            conversation=conversation,
+            payload=ChatMessageCreate(role="assistant", content=answer),
+        )
+        await session.commit()
+        await session.refresh(assistant_message)
+
+    return ChatResponse(
+        conversation_id=conversation_id,
+        message=serialize_chat_message(assistant_message),
+    )
+
+
+@app.get("/api/ai/conversations/last", response_model=ConversationView)
+async def last_ai_conversation(
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ConversationView:
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        conversation = await get_last_owned_conversation(
+            session,
+            owner_user_id=admin_user.id,
+        )
+        if not conversation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found.")
+        return serialize_conversation(conversation)
+
+
+@app.get(
+    "/api/ai/conversations/{conversation_id}/messages",
+    response_model=list[ChatMessageView],
+)
+async def ai_conversation_messages(
+    conversation_id: UUID,
+    limit: int = 50,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> list[ChatMessageView]:
+    if not 1 <= limit <= 50:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="limit must be between 1 and 50.",
+        )
+
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        conversation = await get_owned_conversation(
+            session,
+            conversation_id=conversation_id,
+            owner_user_id=admin_user.id,
+        )
+        if not conversation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found.")
+        messages = await get_recent_messages(
+            session,
+            conversation_id=conversation.id,
+            limit=limit,
+        )
+
+    return [
+        serialize_chat_message(message)
+        for message in messages
+        if message.role in {"user", "assistant"}
+    ]
 
 
 @app.get("/api/transactions")

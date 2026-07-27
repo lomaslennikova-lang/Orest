@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import pool
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from app.database import Base, get_connect_args
+from app.database import Base
 import app.models  # noqa: F401 -- registers all ORM tables in Base.metadata.
 
 
@@ -28,11 +26,13 @@ if not database_url:
     raise RuntimeError("DATABASE_URL is not set. Add it to your .env file.")
 
 url = make_url(database_url)
-if url.drivername == "postgresql":
-    url = url.set(drivername="postgresql+asyncpg")
-url = url.difference_update_query(["sslmode"])
+if url.drivername in {"postgresql", "postgresql+asyncpg"}:
+    url = url.set(drivername="postgresql+psycopg")
 
-config.set_main_option("sqlalchemy.url", str(url))
+# URL.__str__ masks a password as "***". Alembic must receive the real URL to
+# connect, while this value is never written to application logs.
+database_connection_url = url.render_as_string(hide_password=False)
+config.set_main_option("sqlalchemy.url", database_connection_url)
 target_metadata = Base.metadata
 
 
@@ -56,21 +56,16 @@ def do_run_migrations(connection) -> None:
         context.run_migrations()
 
 
-async def run_migrations_online() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        connect_args=get_connect_args(database_url),
-    )
+def run_migrations_online() -> None:
+    connectable = create_engine(database_connection_url, poolclass=pool.NullPool)
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
 
-    await connectable.dispose()
+    connectable.dispose()
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    run_migrations_online()

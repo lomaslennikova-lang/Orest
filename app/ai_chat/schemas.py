@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -90,6 +90,23 @@ class ChatMessageCreate(BaseModel):
     status: MessageStatus = "completed"
 
 
+class ChatRequest(BaseModel):
+    """The only client-controlled input for one AI-chat turn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=2_000)
+    conversation_id: UUID | None = None
+
+    @field_validator("message")
+    @classmethod
+    def normalize_message(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("message must not be blank")
+        return normalized
+
+
 class ChatMessageView(BaseModel):
     id: int
     conversation_id: UUID
@@ -98,9 +115,16 @@ class ChatMessageView(BaseModel):
     tool_name: str | None = None
     tool_call_id: str | None = None
     status: MessageStatus
+    created_at: datetime
 
 
 class ConversationView(BaseModel):
     id: UUID
     owner_user_id: int
     title: str | None = None
+    updated_at: datetime
+
+
+class ChatResponse(BaseModel):
+    conversation_id: UUID
+    message: ChatMessageView
