@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
-from app.ai_chat.graph import open_chat_graph, run_chat_turn
+from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
 from app.ai_chat.repository import (
     add_message,
     create_conversation,
@@ -417,7 +417,13 @@ async def ai_chat(
         conversation_id = conversation.id
         await session.commit()
 
-    answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
+    try:
+        answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
+    except AIChatCheckpointError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
+        ) from error
 
     async with AsyncSessionLocal() as session:
         conversation = await get_owned_conversation(

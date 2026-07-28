@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -700,6 +700,15 @@ function App() {
           </button>
           {isAdmin ? (
             <button
+              className={activeTab === "ai-chat" ? "active" : ""}
+              type="button"
+              onClick={() => setActiveTab("ai-chat")}
+            >
+              AI-помічник
+            </button>
+          ) : null}
+          {isAdmin ? (
+            <button
               className={activeTab === "edit" ? "active" : ""}
               type="button"
               onClick={() => setActiveTab("edit")}
@@ -713,11 +722,19 @@ function App() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <h1>{activeTab === "edit" ? "Редагування" : "Фінансовий стан"}</h1>
+            <h1>
+              {activeTab === "edit"
+                ? "Редагування"
+                : activeTab === "ai-chat"
+                  ? "AI-помічник"
+                  : "Фінансовий стан"}
+            </h1>
             <p>
               {activeTab === "edit"
                 ? "Додавання та видалення транзакцій"
-                : "Дані станом на поточний момент"}
+                : activeTab === "ai-chat"
+                  ? "Запитуйте про доходи, витрати, категорії та динаміку"
+                  : "Дані станом на поточний момент"}
             </p>
           </div>
           <div className="topbar-actions">
@@ -734,100 +751,6 @@ function App() {
 
         {activeTab === "finance" ? (
           <>
-            <section className="metrics" aria-label="Загальні дані">
-              <article className="metric income">
-                <span>Доходи</span>
-                <strong>{formatCurrency(summary.total_income)}</strong>
-              </article>
-              <article className="metric expense">
-                <span>Витрати</span>
-                <strong>{formatCurrency(summary.total_expense)}</strong>
-              </article>
-              <article className="metric balance">
-                <span>Баланс</span>
-                <strong>{formatCurrency(summary.balance)}</strong>
-              </article>
-            </section>
-
-            <section className="panel analysis-action-panel">
-              <div>
-                <h2>AI-аналіз</h2>
-                <p>Аналізуються транзакції відповідно до активних фільтрів.</p>
-                {!hasExpenseTransactions ? (
-                  <p className="analysis-requirement">
-                    Для аналізу потрібна щонайменше одна витрата.
-                  </p>
-                ) : null}
-              </div>
-              <button
-                className={`primary-button analysis-button ${
-                  analysisStatus === "loading"
-                    ? "is-loading"
-                    : !hasExpenseTransactions || chatStatus === "loading"
-                      ? "is-unavailable"
-                      : ""
-                }`}
-                disabled={isAiBusy || !hasExpenseTransactions}
-                type="button"
-                onClick={handleAnalyzeTransactions}
-                title={
-                  chatStatus === "loading"
-                    ? "Завершіть поточний діалог з AI-помічником, щоб виконати аналіз."
-                    : undefined
-                }
-              >
-                {analysisStatus === "loading"
-                  ? "⌛ Аналізуємо…"
-                  : chatStatus === "loading"
-                    ? "⌛ AI-помічник працює…"
-                  : !hasExpenseTransactions
-                    ? "🔒 Аналіз недоступний"
-                    : "✨ Аналіз фінансового стану"}
-              </button>
-            </section>
-
-            {analysisError ? <div className="notice">{analysisError}</div> : null}
-
-            {financialAnalysis ? (
-              <section className="analysis-grid" aria-label="Результати AI-аналізу">
-                <AnalysisCard title="Висновок">
-                  <p>{financialAnalysis.summary}</p>
-                </AnalysisCard>
-                <AnalysisCard title="Топ категорій витрат">
-                  <AnalysisList
-                    items={financialAnalysis.top_expense_categories}
-                    emptyText="Витрат за вибраними фільтрами немає."
-                  />
-                </AnalysisCard>
-                <AnalysisCard title="Ризики">
-                  <AnalysisList
-                    items={financialAnalysis.risks}
-                    emptyText="Можливих ризиків не виявлено."
-                  />
-                </AnalysisCard>
-                <AnalysisCard title="Поради">
-                  <AnalysisList items={financialAnalysis.advice} />
-                </AnalysisCard>
-              </section>
-            ) : null}
-
-            <AiChatPanel
-              chatDraft={chatDraft}
-              chatError={chatError}
-              chatMessages={chatMessages}
-              chatMonth={chatMonth}
-              chatMonthOptions={chatMonthOptions}
-              chatSuggestions={chatSuggestions}
-              chatStatus={chatStatus}
-              disabledByAnalysis={analysisStatus === "loading"}
-              lastChatMessage={lastChatMessage}
-              onChangeDraft={setChatDraft}
-              onChangeMonth={setChatMonth}
-              onRetry={() => sendChatMessage(lastChatMessage)}
-              onSubmit={handleChatSubmit}
-              onSuggestion={sendChatMessage}
-            />
-
             <section className="content-grid">
               <article className="panel filters-panel">
                 <div className="panel-header">
@@ -904,13 +827,111 @@ function App() {
                   </label>
                 </div>
               </article>
+            </section>
 
+            <section className="panel analysis-action-panel">
+              <div>
+                <h2>AI-аналіз</h2>
+                <p>Аналізуються транзакції відповідно до активних фільтрів.</p>
+                {!hasExpenseTransactions ? (
+                  <p className="analysis-requirement">
+                    Для аналізу потрібна щонайменше одна витрата.
+                  </p>
+                ) : null}
+              </div>
+              <button
+                className={`primary-button analysis-button ${
+                  analysisStatus === "loading"
+                    ? "is-loading"
+                    : !hasExpenseTransactions || chatStatus === "loading"
+                      ? "is-unavailable"
+                      : ""
+                }`}
+                disabled={isAiBusy || !hasExpenseTransactions}
+                type="button"
+                onClick={handleAnalyzeTransactions}
+                title={
+                  chatStatus === "loading"
+                    ? "Завершіть поточний діалог з AI-помічником, щоб виконати аналіз."
+                    : undefined
+                }
+              >
+                {analysisStatus === "loading"
+                  ? "⌛ Аналізуємо…"
+                  : chatStatus === "loading"
+                    ? "⌛ AI-помічник працює…"
+                  : !hasExpenseTransactions
+                    ? "🔒 Аналіз недоступний"
+                    : "✨ Аналіз фінансового стану"}
+              </button>
+            </section>
+
+            {analysisError ? <div className="notice">{analysisError}</div> : null}
+
+            {financialAnalysis ? (
+              <section className="analysis-grid" aria-label="Результати AI-аналізу">
+                <AnalysisCard title="Висновок">
+                  <p>{financialAnalysis.summary}</p>
+                </AnalysisCard>
+                <AnalysisCard title="Топ категорій витрат">
+                  <AnalysisList
+                    items={financialAnalysis.top_expense_categories}
+                    emptyText="Витрат за вибраними фільтрами немає."
+                  />
+                </AnalysisCard>
+                <AnalysisCard title="Ризики">
+                  <AnalysisList
+                    items={financialAnalysis.risks}
+                    emptyText="Можливих ризиків не виявлено."
+                  />
+                </AnalysisCard>
+                <AnalysisCard title="Поради">
+                  <AnalysisList items={financialAnalysis.advice} />
+                </AnalysisCard>
+              </section>
+            ) : null}
+
+            <section className="metrics" aria-label="Загальні дані">
+              <article className="metric income">
+                <span>Доходи</span>
+                <strong>{formatCurrency(summary.total_income)}</strong>
+              </article>
+              <article className="metric expense">
+                <span>Витрати</span>
+                <strong>{formatCurrency(summary.total_expense)}</strong>
+              </article>
+              <article className="metric balance">
+                <span>Баланс</span>
+                <strong>{formatCurrency(summary.balance)}</strong>
+              </article>
+            </section>
+
+            <section className="content-grid">
               <TransactionsTable
                 transactions={filteredFinanceTransactions}
                 emptyText="Немає транзакцій за вибраними фільтрами"
               />
             </section>
           </>
+        ) : null}
+
+        {activeTab === "ai-chat" && isAdmin ? (
+          <AiChatPanel
+            chatDraft={chatDraft}
+            chatError={chatError}
+            chatMessages={chatMessages}
+            chatMonth={chatMonth}
+            chatMonthOptions={chatMonthOptions}
+            chatSuggestions={chatSuggestions}
+            chatStatus={chatStatus}
+            disabledByAnalysis={analysisStatus === "loading"}
+            lastChatMessage={lastChatMessage}
+            onChangeDraft={setChatDraft}
+            onChangeMonth={setChatMonth}
+            onRetry={() => sendChatMessage(lastChatMessage)}
+            onSubmit={handleChatSubmit}
+            onSuggestion={sendChatMessage}
+          />
         ) : null}
 
         {activeTab === "edit" && isAdmin ? (
@@ -1131,6 +1152,19 @@ function AiChatPanel({
 }) {
   const isLoading = chatStatus === "loading";
   const isDisabled = isLoading || disabledByAnalysis;
+  const chatHistoryRef = useRef(null);
+
+  useEffect(() => {
+    const history = chatHistoryRef.current;
+    if (!history) {
+      return;
+    }
+
+    history.scrollTo({
+      top: history.scrollHeight,
+      behavior: chatStatus === "idle" ? "smooth" : "auto",
+    });
+  }, [chatMessages, chatStatus]);
 
   return (
     <section className="panel ai-chat-panel" aria-label="AI-помічник">
@@ -1144,7 +1178,7 @@ function AiChatPanel({
         {isLoading ? <span className="chat-status">AI-помічник аналізує…</span> : null}
       </div>
 
-      <div className="chat-history" aria-live="polite">
+      <div className="chat-history" aria-live="polite" ref={chatHistoryRef}>
         {!chatMessages.length && !isLoading ? (
           <div className="chat-empty">
             <p>Почніть діалог або виберіть одну зі стартових підказок нижче.</p>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import operator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, AsyncIterator, TypedDict
@@ -10,6 +11,8 @@ from uuid import UUID
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
+from psycopg import Error as PsycopgError
+from psycopg_pool import AsyncConnectionPool
 
 from app.ai_chat.gemini import AIChatLLMError, GeminiToolCall, generate_chat_turn
 from app.ai_chat.tools import FINANCIAL_TOOLS
@@ -21,6 +24,10 @@ SAFE_FAILURE_RESPONSE = (
     "Не вдалося завершити аналіз. Спробуйте, будь ласка, сформулювати запит коротше "
     "або уточнити період."
 )
+
+
+class AIChatCheckpointError(RuntimeError):
+    """Raised when PostgreSQL checkpoint storage stays unavailable after a retry."""
 
 
 class ChatGraphState(TypedDict, total=False):
@@ -129,22 +136,47 @@ def _checkpointer_url() -> str:
 async def open_chat_graph() -> AsyncIterator[Any]:
     """Open and initialise the durable PostgreSQL checkpointer for the app lifespan."""
 
-    async with AsyncPostgresSaver.from_conn_string(_checkpointer_url()) as checkpointer:
+    # A pool lets LangGraph acquire a fresh healthy connection for every
+    # checkpoint operation.  Holding one AsyncConnection here is fragile in
+    # development: uvicorn reloads and an idle managed PostgreSQL connection
+    # can leave that long-lived connection closed.
+    pool = AsyncConnectionPool(
+        conninfo=_checkpointer_url(),
+        kwargs={"autocommit": True},
+        min_size=1,
+        max_size=5,
+        open=False,
+    )
+    await pool.open()
+    try:
+        checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()
         yield build_chat_graph(checkpointer)
+    finally:
+        await pool.close()
 
 
 async def run_chat_turn(graph: Any, conversation_id: UUID, message: str) -> str:
     """Run one bounded chat turn; the UUID is the durable LangGraph thread ID."""
 
-    result = await graph.ainvoke(
-        {
-            "contents": [{"role": "user", "parts": [{"text": message}]}],
-            "tool_steps": 0,
-            "tool_calls": [],
-            "response": "",
-        },
-        {"configurable": {"thread_id": str(conversation_id)}},
-    )
+    graph_input = {
+        "contents": [{"role": "user", "parts": [{"text": message}]}],
+        "tool_steps": 0,
+        "tool_calls": [],
+        "response": "",
+    }
+    graph_config = {"configurable": {"thread_id": str(conversation_id)}}
+
+    for attempt in range(2):
+        try:
+            result = await graph.ainvoke(graph_input, graph_config)
+            break
+        except PsycopgError as error:
+            if attempt:
+                raise AIChatCheckpointError from error
+            # Managed PostgreSQL may replace an idle connection.  The pool
+            # discards it; repeating once lets the next checkout use a new one.
+            await asyncio.sleep(0.2)
+
     response = result.get("response", "").strip()
     return response or SAFE_FAILURE_RESPONSE
