@@ -251,6 +251,7 @@ class AIPendingAction(Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     draft_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    execution_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     idempotency_key: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         nullable=False,

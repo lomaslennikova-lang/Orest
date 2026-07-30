@@ -19,6 +19,13 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
 from app.ai_actions.runtime import ensure_ai_runtime_directories, get_ai_runtime_settings
+from app.ai_actions.transactions import (
+    TransactionCreateData,
+    TransactionValidationError,
+    create_transaction_for_user,
+    get_or_create_user_by_name,
+    normalise_transaction_data,
+)
 from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
 from app.ai_chat.rate_limit import ChatRateLimiter
 from app.ai_chat.repository import (
@@ -167,11 +174,6 @@ def require_admin(request: Request) -> dict[str, object]:
     return session
 
 
-def get_admin_telegram_id(username: str) -> int:
-    digest = hashlib.sha256(username.encode()).hexdigest()
-    return -int(digest[:15], 16)
-
-
 def serialize_transaction(row) -> dict[str, object]:
     amount = Decimal(row.amount or 0)
     return {
@@ -226,90 +228,30 @@ def build_analysis_data(rows) -> dict[str, object]:
 
 
 async def get_or_create_admin_user(session, username: str) -> User:
-    normalized_username = username.strip()
-    if not normalized_username:
+    try:
+        return await get_or_create_user_by_name(session, username)
+    except TransactionValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="User is required.",
-        )
-
-    result = await session.execute(
-        select(User).where(
-            or_(
-                User.username == normalized_username,
-                User.first_name == normalized_username,
-            )
-        )
-    )
-    user = result.scalars().first()
-
-    if user:
-        return user
-
-    user = User(
-        telegram_id=get_admin_telegram_id(normalized_username),
-        username=normalized_username,
-        first_name=normalized_username,
-    )
-    session.add(user)
-    await session.flush()
-    return user
-
-
-async def get_or_create_admin_category(
-    session,
-    user: User,
-    category_name: str,
-) -> Category:
-    normalized_category = category_name.strip().lower()
-    if not normalized_category:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Category is required.",
-        )
-
-    result = await session.execute(
-        select(Category).where(
-            Category.user_id == user.id,
-            Category.name == normalized_category,
-        )
-    )
-    category = result.scalar_one_or_none()
-
-    if category:
-        return category
-
-    category = Category(user_id=user.id, name=normalized_category)
-    session.add(category)
-    await session.flush()
-    return category
+            detail=str(error),
+        ) from error
 
 
 def validate_transaction_payload(payload: TransactionCreateRequest) -> None:
-    current_datetime = datetime.now(payload.created_at.tzinfo)
-    if payload.created_at > current_datetime:
+    try:
+        normalise_transaction_data(
+            TransactionCreateData(
+                created_at=payload.created_at,
+                amount=payload.amount,
+                category=payload.category,
+                transaction_type=payload.type,
+            )
+        )
+    except TransactionValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Transaction date and time cannot be later than now.",
-        )
-
-    if payload.amount <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Amount must be greater than zero.",
-        )
-
-    if payload.amount > Decimal("100000"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Amount cannot exceed 100000 UAH.",
-        )
-
-    if payload.type not in {"income", "expense"}:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Transaction type must be income or expense.",
-        )
+            detail=str(error),
+        ) from error
 
 
 @app.get("/health")
@@ -612,22 +554,18 @@ async def create_transaction(
     admin_session: dict[str, object] = Depends(require_admin),
 ) -> dict[str, object]:
     validate_transaction_payload(payload)
-    created_at = payload.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-
     async with AsyncSessionLocal() as session:
         user = await get_or_create_admin_user(session, str(admin_session["username"]))
-        category = await get_or_create_admin_category(session, user, payload.category)
-        transaction = Transaction(
-            user_id=user.id,
-            category_id=category.id,
-            amount=payload.amount.quantize(Decimal("0.01")),
-            transaction_type=payload.type,
-            created_at=created_at,
+        transaction = await create_transaction_for_user(
+            session,
+            user=user,
+            payload=TransactionCreateData(
+                created_at=payload.created_at,
+                amount=payload.amount,
+                category=payload.category,
+                transaction_type=payload.type,
+            ),
         )
-        session.add(transaction)
-        await session.flush()
         transaction_id = transaction.id
         await session.commit()
 
