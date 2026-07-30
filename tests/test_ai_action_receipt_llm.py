@@ -37,6 +37,27 @@ class ReceiptDraftParsingTests(unittest.TestCase):
         )
         self.assertEqual(turn.result.status, "needs_clarification")
 
+    def test_preserves_a_separate_transaction_for_each_receipt_position(self):
+        turn = _parse_receipt_response(
+            gemini_json_response(
+                """{
+                    "status": "pending_confirmation",
+                    "message": "Підготовлено 3 позиції.",
+                    "transactions": [
+                        {"created_at":"2026-07-01T10:30:00Z","amount":"20.00","category":"Продукти","type":"expense"},
+                        {"created_at":"2026-07-01T10:30:00Z","amount":"35.00","category":"Продукти","type":"expense"},
+                        {"created_at":"2026-07-01T10:30:00Z","amount":"15.00","category":"Побутові товари","type":"expense"}
+                    ]
+                }"""
+            )
+        )
+
+        self.assertEqual(len(turn.result.transactions), 3)
+        self.assertEqual(
+            [str(transaction.amount) for transaction in turn.result.transactions],
+            ["20.00", "35.00", "15.00"],
+        )
+
     def test_rejects_income_unknown_fields_and_incomplete_draft(self):
         for payload in (
             '{"status":"pending_confirmation","message":"x","transactions":[]}',

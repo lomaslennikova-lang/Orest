@@ -39,6 +39,14 @@ const emptyNewTransaction = {
   type: "expense",
 };
 
+const RECEIPT_ACCEPTED_TYPES = new Set([
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+]);
+const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
+const RECEIPT_DEFAULT_MESSAGE = "Проаналізуй прикріплений чек і підготуй чернетку витрати.";
+
 function formatCurrency(value) {
   return currencyFormatter.format(Number(value || 0));
 }
@@ -49,6 +57,19 @@ function formatDate(value) {
   }
 
   return dateFormatter.format(new Date(value));
+}
+
+function formatFileSize(value) {
+  if (value < 1024 * 1024) {
+    return `${Math.max(1, Math.round(value / 1024))} КіБ`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} МіБ`;
+}
+
+function isSupportedReceiptFile(file) {
+  return (
+    RECEIPT_ACCEPTED_TYPES.has(file.type) || /\.(pdf|png|jpe?g)$/i.test(file.name || "")
+  );
 }
 
 function getDateKey(value) {
@@ -151,6 +172,9 @@ function App() {
   const [chatError, setChatError] = useState("");
   const [lastChatMessage, setLastChatMessage] = useState("");
   const [chatMonth, setChatMonth] = useState(getCurrentMonth);
+  const [receiptFile, setReceiptFile] = useState(null);
+  const [receiptError, setReceiptError] = useState("");
+  const [actionBusyId, setActionBusyId] = useState(null);
 
   const isAdmin = currentUser?.role === "admin";
   const currentDateTimeLocal = getCurrentDateTimeLocal();
@@ -208,7 +232,8 @@ function App() {
     return months.reverse();
   }, [transactions]);
 
-  const isAiBusy = analysisStatus === "loading" || chatStatus === "loading";
+  const isAiBusy =
+    analysisStatus === "loading" || chatStatus === "loading" || actionBusyId !== null;
 
   const chatSuggestions = useMemo(() => {
     const month = formatMonth(chatMonth);
@@ -283,8 +308,22 @@ function App() {
         throw new Error("Не вдалося завантажити історію діалогу.");
       }
 
+      const restoredMessages = await messagesResponse.json();
+      const messagesWithActions = await Promise.all(
+        restoredMessages.map(async (message) => {
+          if (message.tool_name !== "pending_action" || !message.tool_call_id) {
+            return message;
+          }
+          try {
+            const pendingAction = await getPendingAction(message.tool_call_id);
+            return { ...message, pendingAction };
+          } catch {
+            return message;
+          }
+        }),
+      );
       setChatConversationId(conversation.id);
-      setChatMessages(await messagesResponse.json());
+      setChatMessages(messagesWithActions);
       setChatStatus("idle");
     } catch (chatLoadError) {
       setChatStatus("error");
@@ -559,8 +598,57 @@ function App() {
     }
   }
 
-  async function sendChatMessage(message) {
-    const normalizedMessage = message.trim();
+  function selectReceiptFile(file) {
+    setReceiptError("");
+    if (!file) {
+      return;
+    }
+    if (!isSupportedReceiptFile(file)) {
+      setReceiptError("Можна прикріпити лише PDF, PNG або JPEG файл.");
+      return;
+    }
+    if (file.size > MAX_RECEIPT_BYTES) {
+      setReceiptError("Розмір чеку не може перевищувати 5 МіБ.");
+      return;
+    }
+    setReceiptFile(file);
+  }
+
+  async function uploadReceipt(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch(`${API_BASE_URL}/api/ai/attachments`, {
+      method: "POST",
+      credentials: "include",
+      body: formData,
+    });
+    if (!response.ok) {
+      let message = "Не вдалося завантажити чек.";
+      try {
+        const data = await response.json();
+        if (data.detail) {
+          message = data.detail;
+        }
+      } catch {
+        // Keep the safe fallback when the API response has no JSON body.
+      }
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async function getPendingAction(actionId) {
+    const response = await fetch(`${API_BASE_URL}/api/ai/actions/${actionId}`, {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error("Не вдалося завантажити чернетку дії.");
+    }
+    return response.json();
+  }
+
+  async function sendChatMessage(message, file = receiptFile) {
+    const normalizedMessage = message.trim() || (file ? RECEIPT_DEFAULT_MESSAGE : "");
     if (!normalizedMessage || isAiBusy) {
       return;
     }
@@ -576,9 +664,12 @@ function App() {
     try {
       setChatStatus("loading");
       setChatError("");
+      setReceiptError("");
       setLastChatMessage(normalizedMessage);
       setChatDraft("");
       setChatMessages((previousMessages) => [...previousMessages, pendingMessage]);
+
+      const uploadedReceipt = file ? await uploadReceipt(file) : null;
 
       const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
         method: "POST",
@@ -587,6 +678,7 @@ function App() {
         body: JSON.stringify({
           message: normalizedMessage,
           conversation_id: chatConversationId,
+          attachment_id: uploadedReceipt?.id || null,
         }),
       });
 
@@ -604,14 +696,20 @@ function App() {
       }
 
       const data = await response.json();
+      const pendingAction = data.pending_action_id
+        ? await getPendingAction(data.pending_action_id)
+        : null;
       setChatConversationId(data.conversation_id);
+      if (file) {
+        setReceiptFile(null);
+      }
       setChatMessages((previousMessages) => [
         ...previousMessages.map((chatMessage) =>
           chatMessage.id === pendingMessage.id
             ? { ...chatMessage, pending: false }
             : chatMessage,
         ),
-        data.message,
+        pendingAction ? { ...data.message, pendingAction } : data.message,
       ]);
       setChatStatus("idle");
     } catch (chatRequestError) {
@@ -626,6 +724,60 @@ function App() {
   function handleChatSubmit(event) {
     event.preventDefault();
     sendChatMessage(chatDraft);
+  }
+
+  async function handlePendingAction(actionId, operation) {
+    if (actionBusyId || isAiBusy) {
+      return;
+    }
+    try {
+      setActionBusyId(actionId);
+      setChatError("");
+      const response = await fetch(`${API_BASE_URL}/api/ai/actions/${actionId}/${operation}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        let message = "Не вдалося виконати дію з чернеткою.";
+        try {
+          const data = await response.json();
+          if (data.detail) {
+            message = data.detail;
+          }
+        } catch {
+          // Keep the safe fallback when the API response has no JSON body.
+        }
+        throw new Error(message);
+      }
+      const result = await response.json();
+      setChatMessages((previousMessages) =>
+        previousMessages.map((chatMessage) => {
+          if (chatMessage.pendingAction?.id !== actionId) {
+            return chatMessage;
+          }
+          return {
+            ...chatMessage,
+            pendingAction: {
+              ...chatMessage.pendingAction,
+              status: result.status,
+              created_transaction_ids: result.created_transaction_ids || [],
+            },
+          };
+        }),
+      );
+      if (operation === "confirm") {
+        await loadDashboard();
+      }
+    } catch (actionError) {
+      setChatError(actionError.message);
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  function openFinanceAfterAction() {
+    setActiveTab("finance");
+    loadDashboard();
   }
 
   if (status === "login" || (!currentUser && status !== "checking" && status !== "error")) {
@@ -925,9 +1077,21 @@ function App() {
             chatSuggestions={chatSuggestions}
             chatStatus={chatStatus}
             disabledByAnalysis={analysisStatus === "loading"}
+            disabledByAction={actionBusyId !== null}
             lastChatMessage={lastChatMessage}
+            receiptError={receiptError}
+            receiptFile={receiptFile}
+            actionBusyId={actionBusyId}
             onChangeDraft={setChatDraft}
             onChangeMonth={setChatMonth}
+            onClearReceipt={() => {
+              setReceiptFile(null);
+              setReceiptError("");
+            }}
+            onConfirmAction={(actionId) => handlePendingAction(actionId, "confirm")}
+            onCancelAction={(actionId) => handlePendingAction(actionId, "cancel")}
+            onOpenFinance={openFinanceAfterAction}
+            onSelectReceipt={selectReceiptFile}
             onRetry={() => sendChatMessage(lastChatMessage)}
             onSubmit={handleChatSubmit}
             onSuggestion={sendChatMessage}
@@ -1135,6 +1299,7 @@ function App() {
 }
 
 function AiChatPanel({
+  actionBusyId,
   chatDraft,
   chatError,
   chatMessages,
@@ -1143,16 +1308,25 @@ function AiChatPanel({
   chatSuggestions,
   chatStatus,
   disabledByAnalysis,
+  disabledByAction,
   lastChatMessage,
+  receiptError,
+  receiptFile,
   onChangeDraft,
   onChangeMonth,
+  onClearReceipt,
+  onConfirmAction,
+  onCancelAction,
+  onOpenFinance,
   onRetry,
+  onSelectReceipt,
   onSubmit,
   onSuggestion,
 }) {
   const isLoading = chatStatus === "loading";
-  const isDisabled = isLoading || disabledByAnalysis;
+  const isDisabled = isLoading || disabledByAnalysis || disabledByAction;
   const chatHistoryRef = useRef(null);
+  const receiptInputRef = useRef(null);
 
   useEffect(() => {
     const history = chatHistoryRef.current;
@@ -1196,6 +1370,16 @@ function AiChatPanel({
               <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
             </div>
             <p>{message.content}</p>
+            {message.pendingAction ? (
+              <PendingActionCard
+                action={message.pendingAction}
+                busy={actionBusyId === message.pendingAction.id}
+                disabled={isDisabled}
+                onCancel={onCancelAction}
+                onConfirm={onConfirmAction}
+                onOpenFinance={onOpenFinance}
+              />
+            ) : null}
           </article>
         ))}
       </div>
@@ -1252,6 +1436,22 @@ function AiChatPanel({
         </p>
       ) : null}
 
+      {receiptError ? <div className="notice chat-receipt-error">{receiptError}</div> : null}
+
+      {receiptFile ? (
+        <div className="chat-receipt" aria-live="polite">
+          <div>
+            <strong>Прикріплений чек</strong>
+            <span>
+              {receiptFile.name} · {formatFileSize(receiptFile.size)}
+            </span>
+          </div>
+          <button className="ghost-button" disabled={isDisabled} type="button" onClick={onClearReceipt}>
+            Прибрати
+          </button>
+        </div>
+      ) : null}
+
       <form className="chat-composer" onSubmit={onSubmit}>
         <label className="sr-only" htmlFor="ai-chat-message">
           Повідомлення для AI-помічника
@@ -1271,15 +1471,111 @@ function AiChatPanel({
             }
           }}
         />
-        <button
-          className="primary-button"
-          disabled={isDisabled || !chatDraft.trim()}
-          type="submit"
-        >
-          {isLoading ? "⌛ Надсилаємо…" : "Надіслати"}
-        </button>
+        <div className="chat-composer-actions">
+          <input
+            accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
+            className="sr-only"
+            disabled={isDisabled}
+            ref={receiptInputRef}
+            type="file"
+            onChange={(event) => {
+              onSelectReceipt(event.target.files?.[0] || null);
+              event.target.value = "";
+            }}
+          />
+          <button
+            className="ghost-button receipt-button"
+            disabled={isDisabled}
+            type="button"
+            onClick={() => receiptInputRef.current?.click()}
+          >
+            Прикріпити чек
+          </button>
+          <button
+            className="primary-button"
+            disabled={isDisabled || (!chatDraft.trim() && !receiptFile)}
+            type="submit"
+          >
+            {isLoading ? "⌛ Надсилаємо…" : "Надіслати"}
+          </button>
+        </div>
       </form>
     </section>
+  );
+}
+
+function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpenFinance }) {
+  if (action.status === "needs_clarification") {
+    return (
+      <div className="pending-action clarification-action">
+        <strong>Потрібне уточнення</strong>
+        <span>Надайте запитувану інформацію в наступному повідомленні разом із цим чеком.</span>
+      </div>
+    );
+  }
+
+  if (action.status === "executed") {
+    return (
+      <div className="pending-action completed-action">
+        <strong>Дію виконано</strong>
+        <span>Створено записів: {action.created_transaction_ids?.length || 0}.</span>
+        <button className="ghost-button" type="button" onClick={onOpenFinance}>
+          Перейти до фінансового стану
+        </button>
+      </div>
+    );
+  }
+
+  if (action.status === "confirmed") {
+    return (
+      <div className="pending-action clarification-action">
+        <strong>Підтвердження обробляється</strong>
+        <span>Оновіть сторінку за кілька секунд, якщо статус не зміниться автоматично.</span>
+      </div>
+    );
+  }
+
+  if (action.status === "cancelled" || action.status === "expired" || action.status === "failed") {
+    return (
+      <div className="pending-action cancelled-action">
+        <strong>{action.status === "cancelled" ? "Дію скасовано" : "Чернетка недоступна"}</strong>
+      </div>
+    );
+  }
+
+  const transactions = action.draft_payload?.transactions || [];
+  return (
+    <div className="pending-action">
+      <strong>Можливі транзакції</strong>
+      <div className="pending-action-list">
+        {transactions.map((transaction, index) => (
+          <div className="pending-transaction" key={`${transaction.created_at}-${index}`}>
+            <span>{formatDate(transaction.created_at)}</span>
+            <span>{formatCurrency(transaction.amount)}</span>
+            <span>{transaction.category}</span>
+            <span className="tag expense">Витрата</span>
+          </div>
+        ))}
+      </div>
+      <div className="pending-action-buttons">
+        <button
+          className="primary-button"
+          disabled={disabled || busy}
+          type="button"
+          onClick={() => onConfirm(action.id)}
+        >
+          {busy ? "⌛ Виконуємо…" : "Підтвердити"}
+        </button>
+        <button
+          className="ghost-button danger-button"
+          disabled={disabled || busy}
+          type="button"
+          onClick={() => onCancel(action.id)}
+        >
+          Скасувати
+        </button>
+      </div>
+    </div>
   );
 }
 

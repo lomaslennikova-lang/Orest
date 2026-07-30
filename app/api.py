@@ -671,7 +671,12 @@ async def ai_chat(
         assistant_message = await add_message(
             session,
             conversation=conversation,
-            payload=ChatMessageCreate(role="assistant", content=answer),
+            payload=ChatMessageCreate(
+                role="assistant",
+                content=answer,
+                tool_name="pending_action" if pending_action else None,
+                tool_call_id=str(pending_action.id) if pending_action else None,
+            ),
         )
         await session.commit()
         await session.refresh(assistant_message)
