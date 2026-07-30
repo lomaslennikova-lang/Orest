@@ -19,6 +19,11 @@ services:
     volumes:
       - ./app:/app/app
       - ./promts:/app/promts:ro
+      - orest_ai_receipts:/var/lib/orest/receipts
+      - orest_ai_audit:/var/lib/orest/audit
+    environment:
+      AI_RECEIPT_STORAGE_DIR: /var/lib/orest/receipts
+      AI_AUDIT_LOG_DIR: /var/lib/orest/audit
     restart: unless-stopped
 
   frontend:
@@ -34,3 +39,7 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+
+volumes:
+  orest_ai_receipts:
+  orest_ai_audit:

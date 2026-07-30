@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
+from app.ai_actions.runtime import ensure_ai_runtime_directories, get_ai_runtime_settings
 from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
 from app.ai_chat.rate_limit import ChatRateLimiter
 from app.ai_chat.repository import (
@@ -37,6 +38,9 @@ from app.models import Category, Transaction, User
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await check_database_connection()
     await init_database()
+    ai_runtime_settings = get_ai_runtime_settings()
+    ensure_ai_runtime_directories(ai_runtime_settings)
+    app.state.ai_runtime_settings = ai_runtime_settings
     app.state.ai_chat_rate_limiter = ChatRateLimiter()
     async with open_chat_graph() as graph:
         app.state.ai_chat_graph = graph
