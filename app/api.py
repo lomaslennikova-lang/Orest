@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
 from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
+from app.ai_chat.rate_limit import ChatRateLimiter
 from app.ai_chat.repository import (
     add_message,
     create_conversation,
@@ -36,6 +37,7 @@ from app.models import Category, Transaction, User
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await check_database_connection()
     await init_database()
+    app.state.ai_chat_rate_limiter = ChatRateLimiter()
     async with open_chat_graph() as graph:
         app.state.ai_chat_graph = graph
         yield
@@ -387,6 +389,16 @@ async def ai_chat(
     admin_session: dict[str, object] = Depends(require_admin),
 ) -> ChatResponse:
     """Persist a user message, run its durable graph thread, and save the answer."""
+
+    retry_after = await request.app.state.ai_chat_rate_limiter.consume(
+        str(admin_session["username"]),
+    )
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Забагато запитів до AI-помічника. Спробуйте ще раз трохи згодом.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
     async with AsyncSessionLocal() as session:
         admin_user = await get_admin_chat_user(session, admin_session)
