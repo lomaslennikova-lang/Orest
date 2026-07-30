@@ -97,6 +97,7 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=2_000)
     conversation_id: UUID | None = None
+    attachment_id: UUID | None = None
 
     @field_validator("message")
     @classmethod
@@ -128,3 +129,5 @@ class ConversationView(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: UUID
     message: ChatMessageView
+    pending_action_id: UUID | None = None
+    pending_action_status: Literal["pending_confirmation", "needs_clarification"] | None = None

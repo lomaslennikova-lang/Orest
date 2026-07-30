@@ -530,6 +530,101 @@ h2 {
   resize: vertical;
 }
 
+.chat-composer-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.receipt-button {
+  white-space: nowrap;
+}
+
+.chat-receipt {
+  align-items: center;
+  background: #f3f8f6;
+  border: 1px solid #bed8d1;
+  border-radius: 7px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 9px 10px;
+}
+
+.chat-receipt div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-receipt span {
+  color: #56635d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.chat-receipt-error {
+  margin-top: 12px;
+}
+
+.pending-action {
+  background: #f5faf8;
+  border: 1px solid #bed8d1;
+  border-radius: 7px;
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 10px;
+}
+
+.pending-action > strong {
+  color: #146c5c;
+  font-size: 13px;
+}
+
+.pending-action > span {
+  color: #56635d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.pending-action-list {
+  display: grid;
+  gap: 6px;
+}
+
+.pending-transaction {
+  align-items: center;
+  display: grid;
+  font-size: 12px;
+  gap: 6px;
+  grid-template-columns: minmax(100px, 1.2fr) auto minmax(90px, 1fr) auto;
+}
+
+.pending-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.danger-button {
+  border-color: #e8baba;
+  color: #a23d3d;
+}
+
+.completed-action {
+  background: #edf8f2;
+}
+
+.cancelled-action {
+  background: #fff7f7;
+  border-color: #e8baba;
+}
+
+.cancelled-action > strong {
+  color: #a23d3d;
+}
+
 .sr-only {
   height: 1px;
   margin: -1px;
@@ -750,6 +845,10 @@ th {
   .chat-suggestions,
   .chat-composer {
     grid-template-columns: 1fr;
+  }
+
+  .pending-transaction {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

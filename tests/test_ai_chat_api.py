@@ -11,6 +11,10 @@ class AIChatRouteTests(unittest.TestCase):
         self.assertTrue(
             {
                 "/api/ai/chat",
+                "/api/ai/attachments",
+                "/api/ai/actions/{action_id}",
+                "/api/ai/actions/{action_id}/confirm",
+                "/api/ai/actions/{action_id}/cancel",
                 "/api/ai/conversations/last",
                 "/api/ai/conversations/{conversation_id}/messages",
             }

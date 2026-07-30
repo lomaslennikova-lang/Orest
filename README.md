@@ -149,6 +149,10 @@ GET /api/transactions
 POST /api/transactions
 DELETE /api/transactions/{transaction_id}
 POST /api/ai/analyze-transactions
+POST /api/ai/attachments
+GET /api/ai/actions/{action_id}
+POST /api/ai/actions/{action_id}/confirm
+POST /api/ai/actions/{action_id}/cancel
 ```
 
 ## Налагодження

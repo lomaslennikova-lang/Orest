@@ -8,16 +8,45 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, AsyncIterator, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
+from app.ai_actions.audit import AuditLogWriter
+from app.ai_actions.pending import (
+    PendingActionError,
+    PendingActionExpiredError,
+    PendingActionNotFoundError,
+    PendingActionStateError,
+    ExpenseActionDraft,
+    cancel_pending_action,
+    confirm_pending_action,
+    create_clarification_action,
+    create_pending_expense_action,
+    expire_open_actions_for_new_message,
+)
+from app.ai_actions.receipt_llm import ReceiptDraftLLMError, analyse_receipt_to_draft
+from app.ai_actions.receipts import MAX_RECEIPT_BYTES, ReceiptStorage, ReceiptValidationError
+from app.ai_actions.runtime import ensure_ai_runtime_directories, get_ai_runtime_settings
+from app.ai_actions.schemas import (
+    ActionCancelResponse,
+    ActionConfirmResponse,
+    PendingActionView,
+    ReceiptAttachmentView,
+)
+from app.ai_actions.transactions import (
+    TransactionCreateData,
+    TransactionValidationError,
+    create_transaction_for_user,
+    get_or_create_user_by_name,
+    normalise_transaction_data,
+)
 from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
 from app.ai_chat.rate_limit import ChatRateLimiter
 from app.ai_chat.repository import (
@@ -30,13 +59,16 @@ from app.ai_chat.repository import (
 from app.ai_chat.schemas import ChatMessageCreate, ChatMessageView, ChatRequest, ChatResponse, ConversationView
 from app.database import AsyncSessionLocal, check_database_connection, init_database
 from app.llm import LLMRequestError, analyze_transactions
-from app.models import Category, Transaction, User
+from app.models import AIPendingAction, AIReceiptAttachment, Category, Transaction, User
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await check_database_connection()
     await init_database()
+    ai_runtime_settings = get_ai_runtime_settings()
+    ensure_ai_runtime_directories(ai_runtime_settings)
+    app.state.ai_runtime_settings = ai_runtime_settings
     app.state.ai_chat_rate_limiter = ChatRateLimiter()
     async with open_chat_graph() as graph:
         app.state.ai_chat_graph = graph
@@ -163,11 +195,6 @@ def require_admin(request: Request) -> dict[str, object]:
     return session
 
 
-def get_admin_telegram_id(username: str) -> int:
-    digest = hashlib.sha256(username.encode()).hexdigest()
-    return -int(digest[:15], 16)
-
-
 def serialize_transaction(row) -> dict[str, object]:
     amount = Decimal(row.amount or 0)
     return {
@@ -222,90 +249,30 @@ def build_analysis_data(rows) -> dict[str, object]:
 
 
 async def get_or_create_admin_user(session, username: str) -> User:
-    normalized_username = username.strip()
-    if not normalized_username:
+    try:
+        return await get_or_create_user_by_name(session, username)
+    except TransactionValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="User is required.",
-        )
-
-    result = await session.execute(
-        select(User).where(
-            or_(
-                User.username == normalized_username,
-                User.first_name == normalized_username,
-            )
-        )
-    )
-    user = result.scalars().first()
-
-    if user:
-        return user
-
-    user = User(
-        telegram_id=get_admin_telegram_id(normalized_username),
-        username=normalized_username,
-        first_name=normalized_username,
-    )
-    session.add(user)
-    await session.flush()
-    return user
-
-
-async def get_or_create_admin_category(
-    session,
-    user: User,
-    category_name: str,
-) -> Category:
-    normalized_category = category_name.strip().lower()
-    if not normalized_category:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Category is required.",
-        )
-
-    result = await session.execute(
-        select(Category).where(
-            Category.user_id == user.id,
-            Category.name == normalized_category,
-        )
-    )
-    category = result.scalar_one_or_none()
-
-    if category:
-        return category
-
-    category = Category(user_id=user.id, name=normalized_category)
-    session.add(category)
-    await session.flush()
-    return category
+            detail=str(error),
+        ) from error
 
 
 def validate_transaction_payload(payload: TransactionCreateRequest) -> None:
-    current_datetime = datetime.now(payload.created_at.tzinfo)
-    if payload.created_at > current_datetime:
+    try:
+        normalise_transaction_data(
+            TransactionCreateData(
+                created_at=payload.created_at,
+                amount=payload.amount,
+                category=payload.category,
+                transaction_type=payload.type,
+            )
+        )
+    except TransactionValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Transaction date and time cannot be later than now.",
-        )
-
-    if payload.amount <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Amount must be greater than zero.",
-        )
-
-    if payload.amount > Decimal("100000"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Amount cannot exceed 100000 UAH.",
-        )
-
-    if payload.type not in {"income", "expense"}:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Transaction type must be income or expense.",
-        )
+            detail=str(error),
+        ) from error
 
 
 @app.get("/health")
@@ -378,8 +345,187 @@ def serialize_conversation(conversation) -> ConversationView:
     )
 
 
+def serialize_receipt_attachment(attachment: AIReceiptAttachment) -> ReceiptAttachmentView:
+    return ReceiptAttachmentView(
+        id=attachment.id,
+        filename=attachment.original_filename,
+        media_type=attachment.media_type,
+        byte_size=attachment.byte_size,
+        created_at=attachment.created_at,
+        expires_at=attachment.expires_at,
+    )
+
+
+def serialize_pending_action(action: AIPendingAction) -> PendingActionView:
+    execution_result = action.execution_result or {}
+    transaction_ids = execution_result.get("created_transaction_ids")
+    return PendingActionView(
+        id=action.id,
+        conversation_id=action.conversation_id,
+        status=action.status,
+        draft_payload=action.draft_payload,
+        expires_at=action.expires_at,
+        completed_at=action.completed_at,
+        created_transaction_ids=transaction_ids if isinstance(transaction_ids, list) else None,
+    )
+
+
 async def get_admin_chat_user(session, admin_session: dict[str, object]) -> User:
     return await get_or_create_admin_user(session, str(admin_session["username"]))
+
+
+def _no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _pending_action_http_error(error: PendingActionError) -> HTTPException:
+    if isinstance(error, PendingActionNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено.")
+    if isinstance(error, PendingActionExpiredError):
+        return HTTPException(status_code=status.HTTP_410_GONE, detail="Строк дії чернетки минув.")
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Чернетка вже оброблена або недоступна для цієї дії.",
+    )
+
+
+@app.post("/api/ai/attachments", response_model=ReceiptAttachmentView, status_code=status.HTTP_201_CREATED)
+async def upload_ai_receipt(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ReceiptAttachmentView:
+    """Store one bounded receipt file privately for the authenticated Admin."""
+
+    _no_store(response)
+    filename = file.filename or "receipt"
+    content = await file.read(MAX_RECEIPT_BYTES + 1)
+    await file.close()
+    if len(content) > MAX_RECEIPT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Розмір файла чеку не може перевищувати 5 МіБ.",
+        )
+
+    storage = ReceiptStorage(request.app.state.ai_runtime_settings)
+    try:
+        stored = await asyncio.to_thread(storage.store, content, filename)
+    except ReceiptValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
+
+    try:
+        async with AsyncSessionLocal() as session:
+            admin_user = await get_admin_chat_user(session, admin_session)
+            attachment = AIReceiptAttachment(
+                owner_user_id=admin_user.id,
+                original_filename=stored.original_filename,
+                media_type=stored.media_type,
+                byte_size=stored.byte_size,
+                content_sha256=stored.content_sha256,
+                storage_key=stored.storage_key,
+                expires_at=stored.stored_at
+                + timedelta(days=request.app.state.ai_runtime_settings.receipt_retention_days),
+            )
+            session.add(attachment)
+            await session.commit()
+            await session.refresh(attachment)
+    except Exception:
+        await asyncio.to_thread(storage.delete, stored.storage_key)
+        raise
+
+    return serialize_receipt_attachment(attachment)
+
+
+@app.get("/api/ai/actions/{action_id}", response_model=PendingActionView)
+async def get_ai_action(
+    action_id: UUID,
+    response: Response,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> PendingActionView:
+    """Return only an action owned by the current Admin session."""
+
+    _no_store(response)
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        action = await session.scalar(
+            select(AIPendingAction).where(
+                AIPendingAction.id == action_id,
+                AIPendingAction.owner_user_id == admin_user.id,
+            )
+        )
+        if not action:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено.")
+        return serialize_pending_action(action)
+
+
+@app.post("/api/ai/actions/{action_id}/confirm", response_model=ActionConfirmResponse)
+async def confirm_ai_action(
+    action_id: UUID,
+    request: Request,
+    response: Response,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ActionConfirmResponse:
+    """Execute one owned draft; a repeated confirm returns its saved result."""
+
+    _no_store(response)
+    action_error: PendingActionError | None = None
+    result = None
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            admin_user = await get_admin_chat_user(session, admin_session)
+            try:
+                result = await confirm_pending_action(
+                    session,
+                    action_id=action_id,
+                    owner=admin_user,
+                    audit_writer=AuditLogWriter(request.app.state.ai_runtime_settings),
+                )
+            except (PendingActionNotFoundError, PendingActionExpiredError, PendingActionStateError) as error:
+                # The service can persist expired/failed state before raising.
+                # Catching inside this transaction intentionally commits that state.
+                action_error = error
+        if action_error:
+            raise _pending_action_http_error(action_error)
+
+    assert result is not None
+    return ActionConfirmResponse(
+        id=result.action_id,
+        status=result.status,
+        created_transaction_ids=result.created_transaction_ids,
+    )
+
+
+@app.post("/api/ai/actions/{action_id}/cancel", response_model=ActionCancelResponse)
+async def cancel_ai_action(
+    action_id: UUID,
+    response: Response,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ActionCancelResponse:
+    """Cancel one owned, not-yet-executed action."""
+
+    _no_store(response)
+    action_error: PendingActionError | None = None
+    cancelled_action = None
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            admin_user = await get_admin_chat_user(session, admin_session)
+            try:
+                cancelled_action = await cancel_pending_action(
+                    session,
+                    action_id=action_id,
+                    owner_user_id=admin_user.id,
+                )
+            except (PendingActionNotFoundError, PendingActionExpiredError, PendingActionStateError) as error:
+                action_error = error
+        if action_error:
+            raise _pending_action_http_error(action_error)
+
+    assert cancelled_action is not None
+    return ActionCancelResponse(id=cancelled_action.id, status="cancelled")
 
 
 @app.post("/api/ai/chat", response_model=ChatResponse)
@@ -400,6 +546,8 @@ async def ai_chat(
             headers={"Retry-After": str(retry_after)},
         )
 
+    attachment_meta: tuple[str, str, str] | None = None
+    admin_user_id: int
     async with AsyncSessionLocal() as session:
         admin_user = await get_admin_chat_user(session, admin_session)
         if payload.conversation_id:
@@ -421,21 +569,96 @@ async def ai_chat(
                     owner_user_id=admin_user.id,
                 )
 
+        if payload.attachment_id:
+            attachment = await session.scalar(
+                select(AIReceiptAttachment).where(
+                    AIReceiptAttachment.id == payload.attachment_id,
+                    AIReceiptAttachment.owner_user_id == admin_user.id,
+                )
+            )
+            if not attachment:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чек не знайдено.")
+            if attachment.expires_at <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=status.HTTP_410_GONE, detail="Строк зберігання чеку минув.")
+            attachment_meta = (
+                attachment.storage_key,
+                attachment.media_type,
+                attachment.original_filename,
+            )
+
+        await expire_open_actions_for_new_message(
+            session,
+            conversation_id=conversation.id,
+            owner_user_id=admin_user.id,
+        )
+
         await add_message(
             session,
             conversation=conversation,
             payload=ChatMessageCreate(role="user", content=payload.message),
         )
         conversation_id = conversation.id
+        admin_user_id = admin_user.id
         await session.commit()
 
-    try:
-        answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
-    except AIChatCheckpointError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
-        ) from error
+    pending_action = None
+    if attachment_meta is not None and payload.attachment_id is not None:
+        storage_key, media_type, filename = attachment_meta
+        try:
+            content = await asyncio.to_thread(
+                ReceiptStorage(request.app.state.ai_runtime_settings).read,
+                storage_key,
+            )
+            receipt_turn = await analyse_receipt_to_draft(
+                content=content,
+                media_type=media_type,
+                filename=filename,
+                user_message=payload.message,
+            )
+        except (RuntimeError, ReceiptDraftLLMError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Не вдалося проаналізувати чек. Спробуйте ще раз трохи згодом.",
+            ) from error
+
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+        try:
+            async with AsyncSessionLocal() as session:
+                if receipt_turn.result.status == "pending_confirmation":
+                    pending_action = await create_pending_expense_action(
+                        session,
+                        conversation_id=conversation_id,
+                        owner_user_id=admin_user_id,
+                        draft=ExpenseActionDraft(
+                            transactions=receipt_turn.result.transactions,
+                        ),
+                        attachment_id=payload.attachment_id,
+                        expires_at=expires_at,
+                    )
+                else:
+                    pending_action = await create_clarification_action(
+                        session,
+                        conversation_id=conversation_id,
+                        owner_user_id=admin_user_id,
+                        clarification=receipt_turn.result.message,
+                        attachment_id=payload.attachment_id,
+                        expires_at=expires_at,
+                    )
+                await session.commit()
+        except PendingActionStateError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Чернетка з чеку містить невалідні дані. Уточніть, будь ласка, дані чеку.",
+            ) from error
+        answer = receipt_turn.result.message
+    else:
+        try:
+            answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
+        except AIChatCheckpointError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
+            ) from error
 
     async with AsyncSessionLocal() as session:
         conversation = await get_owned_conversation(
@@ -448,7 +671,12 @@ async def ai_chat(
         assistant_message = await add_message(
             session,
             conversation=conversation,
-            payload=ChatMessageCreate(role="assistant", content=answer),
+            payload=ChatMessageCreate(
+                role="assistant",
+                content=answer,
+                tool_name="pending_action" if pending_action else None,
+                tool_call_id=str(pending_action.id) if pending_action else None,
+            ),
         )
         await session.commit()
         await session.refresh(assistant_message)
@@ -456,6 +684,8 @@ async def ai_chat(
     return ChatResponse(
         conversation_id=conversation_id,
         message=serialize_chat_message(assistant_message),
+        pending_action_id=pending_action.id if pending_action else None,
+        pending_action_status=pending_action.status if pending_action else None,
     )
 
 
@@ -608,22 +838,18 @@ async def create_transaction(
     admin_session: dict[str, object] = Depends(require_admin),
 ) -> dict[str, object]:
     validate_transaction_payload(payload)
-    created_at = payload.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-
     async with AsyncSessionLocal() as session:
         user = await get_or_create_admin_user(session, str(admin_session["username"]))
-        category = await get_or_create_admin_category(session, user, payload.category)
-        transaction = Transaction(
-            user_id=user.id,
-            category_id=category.id,
-            amount=payload.amount.quantize(Decimal("0.01")),
-            transaction_type=payload.type,
-            created_at=created_at,
+        transaction = await create_transaction_for_user(
+            session,
+            user=user,
+            payload=TransactionCreateData(
+                created_at=payload.created_at,
+                amount=payload.amount,
+                category=payload.category,
+                transaction_type=payload.type,
+            ),
         )
-        session.add(transaction)
-        await session.flush()
         transaction_id = transaction.id
         await session.commit()
 
