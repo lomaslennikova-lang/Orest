@@ -16,6 +16,7 @@ from app.ai_actions.transactions import (
     TransactionCreateData,
     TransactionValidationError,
     create_transaction_for_user,
+    normalise_transaction_data,
 )
 from app.models import AIConversation, AIPendingAction, AIReceiptAttachment, User
 
@@ -109,12 +110,76 @@ async def create_pending_expense_action(
         if not attachment:
             raise PendingActionNotFoundError("Receipt attachment not found.")
 
+    try:
+        normalised_transactions = []
+        for transaction in draft.transactions:
+            normalised = normalise_transaction_data(
+                TransactionCreateData(
+                    created_at=transaction.created_at,
+                    amount=transaction.amount,
+                    category=transaction.category,
+                    transaction_type=transaction.type,
+                )
+            )
+            normalised_transactions.append(
+                ExpenseTransactionDraft(
+                    created_at=normalised.created_at,
+                    amount=normalised.amount,
+                    category=normalised.category,
+                )
+            )
+    except TransactionValidationError as error:
+        raise PendingActionStateError("Pending action contains an invalid draft.") from error
+
+    normalised_draft = ExpenseActionDraft(transactions=normalised_transactions)
     action = AIPendingAction(
         conversation_id=conversation_id,
         owner_user_id=owner_user_id,
         attachment_id=attachment_id,
         status="pending_confirmation",
-        draft_payload=draft.model_dump(mode="json"),
+        draft_payload=normalised_draft.model_dump(mode="json"),
+        expires_at=_current_time(expires_at),
+    )
+    session.add(action)
+    await session.flush()
+    return action
+
+
+async def create_clarification_action(
+    session: AsyncSession,
+    *,
+    conversation_id: UUID,
+    owner_user_id: int,
+    clarification: str,
+    expires_at: datetime,
+    attachment_id: UUID | None = None,
+) -> AIPendingAction:
+    """Persist a no-write state that records the exact information still needed."""
+
+    conversation = await session.scalar(
+        select(AIConversation).where(
+            AIConversation.id == conversation_id,
+            AIConversation.owner_user_id == owner_user_id,
+        )
+    )
+    if not conversation:
+        raise PendingActionNotFoundError("Chat not found.")
+    if attachment_id is not None:
+        attachment = await session.scalar(
+            select(AIReceiptAttachment).where(
+                AIReceiptAttachment.id == attachment_id,
+                AIReceiptAttachment.owner_user_id == owner_user_id,
+            )
+        )
+        if not attachment:
+            raise PendingActionNotFoundError("Receipt attachment not found.")
+
+    action = AIPendingAction(
+        conversation_id=conversation_id,
+        owner_user_id=owner_user_id,
+        attachment_id=attachment_id,
+        status="needs_clarification",
+        draft_payload={"clarification": clarification, "transactions": []},
         expires_at=_current_time(expires_at),
     )
     session.add(action)

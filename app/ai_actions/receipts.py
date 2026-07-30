@@ -217,6 +217,14 @@ class ReceiptStorage:
         except OSError as error:
             raise RuntimeError("Не вдалося видалити прострочений файл чеку.") from error
 
+    def read(self, storage_key: str) -> bytes:
+        """Read a generated receipt key from private storage only."""
+
+        try:
+            return self._path_for_key(storage_key).read_bytes()
+        except OSError as error:
+            raise RuntimeError("Файл чеку тимчасово недоступний.") from error
+
 
 async def cleanup_expired_receipts(
     session: AsyncSession,

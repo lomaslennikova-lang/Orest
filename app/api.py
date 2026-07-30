@@ -24,10 +24,14 @@ from app.ai_actions.pending import (
     PendingActionExpiredError,
     PendingActionNotFoundError,
     PendingActionStateError,
+    ExpenseActionDraft,
     cancel_pending_action,
     confirm_pending_action,
+    create_clarification_action,
+    create_pending_expense_action,
     expire_open_actions_for_new_message,
 )
+from app.ai_actions.receipt_llm import ReceiptDraftLLMError, analyse_receipt_to_draft
 from app.ai_actions.receipts import MAX_RECEIPT_BYTES, ReceiptStorage, ReceiptValidationError
 from app.ai_actions.runtime import ensure_ai_runtime_directories, get_ai_runtime_settings
 from app.ai_actions.schemas import (
@@ -542,6 +546,8 @@ async def ai_chat(
             headers={"Retry-After": str(retry_after)},
         )
 
+    attachment_meta: tuple[str, str, str] | None = None
+    admin_user_id: int
     async with AsyncSessionLocal() as session:
         admin_user = await get_admin_chat_user(session, admin_session)
         if payload.conversation_id:
@@ -574,6 +580,11 @@ async def ai_chat(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чек не знайдено.")
             if attachment.expires_at <= datetime.now(timezone.utc):
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail="Строк зберігання чеку минув.")
+            attachment_meta = (
+                attachment.storage_key,
+                attachment.media_type,
+                attachment.original_filename,
+            )
 
         await expire_open_actions_for_new_message(
             session,
@@ -587,15 +598,67 @@ async def ai_chat(
             payload=ChatMessageCreate(role="user", content=payload.message),
         )
         conversation_id = conversation.id
+        admin_user_id = admin_user.id
         await session.commit()
 
-    try:
-        answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
-    except AIChatCheckpointError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
-        ) from error
+    pending_action = None
+    if attachment_meta is not None and payload.attachment_id is not None:
+        storage_key, media_type, filename = attachment_meta
+        try:
+            content = await asyncio.to_thread(
+                ReceiptStorage(request.app.state.ai_runtime_settings).read,
+                storage_key,
+            )
+            receipt_turn = await analyse_receipt_to_draft(
+                content=content,
+                media_type=media_type,
+                filename=filename,
+                user_message=payload.message,
+            )
+        except (RuntimeError, ReceiptDraftLLMError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Не вдалося проаналізувати чек. Спробуйте ще раз трохи згодом.",
+            ) from error
+
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+        try:
+            async with AsyncSessionLocal() as session:
+                if receipt_turn.result.status == "pending_confirmation":
+                    pending_action = await create_pending_expense_action(
+                        session,
+                        conversation_id=conversation_id,
+                        owner_user_id=admin_user_id,
+                        draft=ExpenseActionDraft(
+                            transactions=receipt_turn.result.transactions,
+                        ),
+                        attachment_id=payload.attachment_id,
+                        expires_at=expires_at,
+                    )
+                else:
+                    pending_action = await create_clarification_action(
+                        session,
+                        conversation_id=conversation_id,
+                        owner_user_id=admin_user_id,
+                        clarification=receipt_turn.result.message,
+                        attachment_id=payload.attachment_id,
+                        expires_at=expires_at,
+                    )
+                await session.commit()
+        except PendingActionStateError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Чернетка з чеку містить невалідні дані. Уточніть, будь ласка, дані чеку.",
+            ) from error
+        answer = receipt_turn.result.message
+    else:
+        try:
+            answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
+        except AIChatCheckpointError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
+            ) from error
 
     async with AsyncSessionLocal() as session:
         conversation = await get_owned_conversation(
@@ -616,6 +679,8 @@ async def ai_chat(
     return ChatResponse(
         conversation_id=conversation_id,
         message=serialize_chat_message(assistant_message),
+        pending_action_id=pending_action.id if pending_action else None,
+        pending_action_status=pending_action.status if pending_action else None,
     )
 
 

@@ -129,3 +129,5 @@ class ConversationView(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: UUID
     message: ChatMessageView
+    pending_action_id: UUID | None = None
+    pending_action_status: Literal["pending_confirmation", "needs_clarification"] | None = None
