@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -36,6 +37,12 @@ class User(Base):
     categories: Mapped[list["Category"]] = relationship(back_populates="user")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="user")
     ai_conversations: Mapped[list["AIConversation"]] = relationship(
+        back_populates="owner_user",
+    )
+    ai_receipt_attachments: Mapped[list["AIReceiptAttachment"]] = relationship(
+        back_populates="owner_user",
+    )
+    ai_pending_actions: Mapped[list["AIPendingAction"]] = relationship(
         back_populates="owner_user",
     )
 
@@ -115,6 +122,10 @@ class AIConversation(Base):
         cascade="all, delete-orphan",
         order_by="AIMessage.created_at",
     )
+    pending_actions: Mapped[list["AIPendingAction"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )
 
 
 class AIMessage(Base):
@@ -154,3 +165,108 @@ class AIMessage(Base):
     )
 
     conversation: Mapped["AIConversation"] = relationship(back_populates="messages")
+
+
+class AIReceiptAttachment(Base):
+    """A validated receipt stored outside the web root for an AI-chat owner."""
+
+    __tablename__ = "ai_receipt_attachments"
+    __table_args__ = (
+        CheckConstraint(
+            "media_type IN ('application/pdf', 'image/png', 'image/jpeg')",
+            name="ck_ai_receipt_attachments_media_type",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    owner_user: Mapped["User"] = relationship(back_populates="ai_receipt_attachments")
+    pending_actions: Mapped[list["AIPendingAction"]] = relationship(
+        back_populates="attachment",
+    )
+
+
+class AIPendingAction(Base):
+    """A server-owned, confirmable snapshot of a proposed AI write action."""
+
+    __tablename__ = "ai_pending_actions"
+    __table_args__ = (
+        CheckConstraint(
+            "action_type = 'create_expense_transactions'",
+            name="ck_ai_pending_actions_action_type",
+        ),
+        CheckConstraint(
+            "status IN ("
+            "'needs_clarification', 'pending_confirmation', 'confirmed', "
+            "'executed', 'cancelled', 'expired', 'failed'"
+            ")",
+            name="ck_ai_pending_actions_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    conversation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("ai_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    attachment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("ai_receipt_attachments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    action_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        server_default="create_expense_transactions",
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    draft_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    idempotency_key: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        nullable=False,
+        default=uuid4,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    conversation: Mapped["AIConversation"] = relationship(back_populates="pending_actions")
+    owner_user: Mapped["User"] = relationship(back_populates="ai_pending_actions")
+    attachment: Mapped["AIReceiptAttachment | None"] = relationship(
+        back_populates="pending_actions",
+    )
