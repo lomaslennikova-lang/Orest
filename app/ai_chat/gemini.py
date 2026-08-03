@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -16,8 +17,17 @@ from app.ai_chat.tools import FINANCIAL_TOOLS
 from app.llm import GEMINI_MODELS_URL
 
 
-class AIChatLLMError(Exception):
+MAX_GEMINI_ATTEMPTS = 3
+RETRY_DELAYS_SECONDS = (0.5, 1.0)
+RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+
+class AIChatLLMError(RuntimeError):
     """Raised when Gemini cannot produce a usable chat turn."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -91,6 +101,34 @@ def _parse_turn(payload: dict[str, Any]) -> GeminiTurn:
     return GeminiTurn(content=content, text="\n".join(text_parts).strip(), tool_calls=tool_calls)
 
 
+def _load_chat_response(request: Request, timeout: float) -> dict[str, Any]:
+    """Call Gemini with a small retry budget for temporary service failures."""
+
+    for attempt in range(MAX_GEMINI_ATTEMPTS):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return json.load(response)
+        except HTTPError as error:
+            retryable = error.code in RETRYABLE_HTTP_STATUS_CODES
+            if not retryable or attempt == MAX_GEMINI_ATTEMPTS - 1:
+                raise AIChatLLMError(
+                    "The AI service is temporarily unavailable."
+                    if retryable
+                    else "The AI service rejected the request.",
+                    retryable=retryable,
+                ) from error
+        except (URLError, TimeoutError) as error:
+            if attempt == MAX_GEMINI_ATTEMPTS - 1:
+                raise AIChatLLMError(
+                    "The AI service could not be reached.",
+                    retryable=True,
+                ) from error
+
+        time.sleep(RETRY_DELAYS_SECONDS[attempt])
+
+    raise AssertionError("The retry loop must return or raise.")
+
+
 def _generate_chat_turn_sync(
     contents: list[dict[str, Any]],
     timeout: float,
@@ -117,12 +155,7 @@ def _generate_chat_turn_sync(
     )
 
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.load(response)
-    except HTTPError as error:
-        raise AIChatLLMError("The AI service is temporarily unavailable.") from error
-    except (URLError, TimeoutError):
-        raise AIChatLLMError("The AI service could not be reached.") from None
+        payload = _load_chat_response(request, timeout)
     except json.JSONDecodeError:
         raise AIChatLLMError("The AI service returned an invalid response.") from None
 

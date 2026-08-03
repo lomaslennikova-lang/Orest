@@ -50,7 +50,7 @@ from app.ai_actions.transactions import (
     get_or_create_user_by_name,
     normalise_transaction_data,
 )
-from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
+from app.ai_chat.graph import AIChatCheckpointError, AIChatProviderError, open_chat_graph, run_chat_turn
 from app.ai_chat.rate_limit import ChatRateLimiter
 from app.ai_chat.repository import (
     add_message,
@@ -669,10 +669,10 @@ async def ai_chat(
     else:
         try:
             answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
-        except AIChatCheckpointError as error:
+        except (AIChatCheckpointError, AIChatProviderError) as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
+                detail="AI-помічник тимчасово недоступний. Спробуйте ще раз трохи згодом.",
             ) from error
 
     async with AsyncSessionLocal() as session:

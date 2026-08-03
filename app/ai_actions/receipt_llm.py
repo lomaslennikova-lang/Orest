@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Literal
 from urllib.error import HTTPError, URLError
@@ -17,6 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.ai_actions.pending import ExpenseTransactionDraft
 from app.ai_actions.prompts import RECEIPT_DRAFT_SYSTEM_PROMPT
 from app.llm import GEMINI_MODELS_URL
+
+
+MAX_GEMINI_ATTEMPTS = 3
+RETRY_DELAYS_SECONDS = (0.5, 1.0)
+RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 class ReceiptDraftLLMError(RuntimeError):
@@ -54,6 +60,30 @@ def _parse_receipt_response(payload: dict) -> ReceiptDraftTurn:
         return ReceiptDraftTurn(result=ReceiptDraftResponse.model_validate(result_json))
     except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValidationError) as error:
         raise ReceiptDraftLLMError("The receipt model returned an invalid draft.") from error
+
+
+def _load_receipt_response(request: Request, timeout: float) -> dict:
+    """Request one receipt draft with a small retry budget for transient failures."""
+
+    for attempt in range(MAX_GEMINI_ATTEMPTS):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return json.load(response)
+        except HTTPError as error:
+            retryable = error.code in RETRYABLE_HTTP_STATUS_CODES
+            if not retryable or attempt == MAX_GEMINI_ATTEMPTS - 1:
+                raise ReceiptDraftLLMError(
+                    "The receipt AI service is temporarily unavailable."
+                    if retryable
+                    else "The receipt AI service rejected the request."
+                ) from error
+        except (URLError, TimeoutError) as error:
+            if attempt == MAX_GEMINI_ATTEMPTS - 1:
+                raise ReceiptDraftLLMError("The receipt AI service could not be reached.") from error
+
+        time.sleep(RETRY_DELAYS_SECONDS[attempt])
+
+    raise AssertionError("The retry loop must return or raise.")
 
 
 def _analyse_receipt_sync(
@@ -105,12 +135,7 @@ def _analyse_receipt_sync(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.load(response)
-    except HTTPError as error:
-        raise ReceiptDraftLLMError("The receipt AI service is temporarily unavailable.") from error
-    except (URLError, TimeoutError):
-        raise ReceiptDraftLLMError("The receipt AI service could not be reached.") from None
+        payload = _load_receipt_response(request, timeout)
     except json.JSONDecodeError:
         raise ReceiptDraftLLMError("The receipt AI service returned invalid JSON.") from None
 
