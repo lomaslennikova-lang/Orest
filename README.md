@@ -47,6 +47,15 @@ python -m app.dev
 docker compose up --build
 ```
 
+## Розгортання в Render
+
+Production-версія застосунку розгортається як один Render Web Service: `Dockerfile.render` збирає React frontend, а FastAPI віддає SPA, `/api/*` та `/health` з одного HTTPS-домену.
+
+- Детальна інструкція: [docs/deploy.md](docs/deploy.md).
+- Результати перевірки та скріншоти live-деплою: [docs/deploy/DEPLOY_NOTES.md](docs/deploy/DEPLOY_NOTES.md).
+
+Секрети зберігайте лише у локальному `.env` та Render Environment Variables; не додавайте їх до Git.
+
 У Docker Compose бот також перезапускається при змінах у `app/`.
 
 ### Docker admin dashboard
@@ -157,7 +166,7 @@ POST /api/ai/actions/{action_id}/cancel
 
 ## Налагодження
 
-Файл `DEBUG.md` містить історію помилок, які виникали під час запуску бота, та їхні виправлення. Для кожної ситуації там вказано команду запуску, текст помилки, причину та спосіб виправлення.
+Файл `docs/DEBUG.md` містить історію помилок, які виникали під час запуску бота, та їхні виправлення. Для кожної ситуації там вказано команду запуску, текст помилки, причину та спосіб виправлення.
 
 ## Перевірка секретів
 
@@ -256,6 +265,32 @@ app/
   main.py
   models.py
   prompts.py
+  ai_actions/
+    __init__.py
+    audit.py
+    pending.py
+    prompts.py
+    receipt_llm.py
+    receipts.py
+    runtime.py
+    schemas.py
+    transactions.py
+  ai_chat/
+    __init__.py
+    gemini.py
+    graph.py
+    prompts.py
+    rate_limit.py
+    repository.py
+    schemas.py
+    tools.py
+alembic/
+  env.py
+  script.py.mako
+  versions/
+    20260726_01_add_ai_chat_tables.py
+    20260730_02_add_ai_receipt_actions.py
+    20260730_03_add_ai_action_execution_result.py
 promts/
   financial_analysis_gemini.md
   template.md
@@ -269,19 +304,65 @@ frontend/
     main.jsx
     styles.css
 docs/
+  ai/
+    AI_ACTION_0.PNG
+    AI_ACTION_1.PNG
+    AI_ACTION_2.PNG
+    ai_chat_prompt.md
+    ai_plan_action.md
+    ai_prompt_deploy.md
+    AI_ASSISTANT_NOTES.md
+    AI_ACTIONS_NOTES.md
+    AI_CHAT_0.PNG
+    AI_CHAT_1.PNG
+    AI_CHAT_2.PNG
+    AI_PROMT_NOTES.md
+  deploy/
+    DEPLOY_NOTES.md
+    DEPLOY_0.PNG
+    DEPLOY_1.PNG
+    DEPLOY_2.PNG
+    DEPLOY_3.PNG
+    DEPLOY_4.PNG
   architecture.md
   architecture_example.md
   database.md
+  DEBUG.md
+  deploy.md
+  homework/
+    VibeCoding_Masliennikova_HW03.txt
+    VibeCoding_Masliennikova_HW04.txt
+    VibeCoding_Masliennikova_HW05.txt
+    VibeCoding_Masliennikova_HW06.txt
+    VibeCoding_Masliennikova_HW07.pdf
+    VibeCoding_Masliennikova_HW08.pdf
+    VibeCoding_Masliennikova_HW09.pdf
+    VibeCoding_Masliennikova_HW10.pdf
+    VibeCoding_Masliennikova_HW11.txt
+    VibeCoding_Masliennikova_HW12.txt
   security.md
 scripts/
   check-llm.ps1
   scan-secrets.ps1
+tests/
+  test_ai_action_pending.py
+  test_ai_action_receipt_llm.py
+  test_ai_action_runtime.py
+  test_ai_chat_api.py
+  test_ai_chat_gemini.py
+  test_ai_chat_graph.py
+  test_ai_chat_rate_limit.py
+  test_ai_chat_tools.py
 requirements.txt
 .env.example
 .gitignore
-DEBUG.md
+.dockerignore
 README.md
 Dockerfile
+Dockerfile.render
 docker-compose.yml
+alembic.ini
 Orest.png
 ```
+
+Службові та секретні файли не наведені: `.env`, `.venv/`, `frontend/node_modules/`, frontend build-артефакти, `__pycache__/` і Git-метадані. Вони або ігноруються Git, або створюються локально.
