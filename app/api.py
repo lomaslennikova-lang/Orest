@@ -10,11 +10,14 @@ import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 
@@ -47,7 +50,7 @@ from app.ai_actions.transactions import (
     get_or_create_user_by_name,
     normalise_transaction_data,
 )
-from app.ai_chat.graph import AIChatCheckpointError, open_chat_graph, run_chat_turn
+from app.ai_chat.graph import AIChatCheckpointError, AIChatProviderError, open_chat_graph, run_chat_turn
 from app.ai_chat.rate_limit import ChatRateLimiter
 from app.ai_chat.repository import (
     add_message,
@@ -78,6 +81,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Orest Admin API", lifespan=lifespan)
 SESSION_COOKIE_NAME = "orest_admin_session"
 SESSION_TTL_SECONDS = 60 * 60 * 8
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 app.add_middleware(
     CORSMiddleware,
@@ -133,6 +137,16 @@ def get_auth_settings() -> tuple[str, str, str]:
         )
 
     return username, password, session_secret
+
+
+def use_secure_session_cookie() -> bool:
+    """Enable Secure cookies only when the deployment explicitly requests it."""
+
+    return os.getenv("ADMIN_SESSION_COOKIE_SECURE", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def encode_session(payload: dict[str, object], session_secret: str) -> str:
@@ -304,6 +318,7 @@ async def login(credentials: LoginRequest, response: Response) -> dict[str, str]
         value=encode_session(session, session_secret),
         httponly=True,
         samesite="lax",
+        secure=use_secure_session_cookie(),
         max_age=SESSION_TTL_SECONDS,
     )
     return {"username": username, "role": "admin"}
@@ -654,10 +669,10 @@ async def ai_chat(
     else:
         try:
             answer = await run_chat_turn(request.app.state.ai_chat_graph, conversation_id, payload.message)
-        except AIChatCheckpointError as error:
+        except (AIChatCheckpointError, AIChatProviderError) as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Сховище діалогу тимчасово недоступне. Спробуйте ще раз за кілька секунд.",
+                detail="AI-помічник тимчасово недоступний. Спробуйте ще раз трохи згодом.",
             ) from error
 
     async with AsyncSessionLocal() as session:
@@ -906,3 +921,26 @@ async def summary(
         "total_expense": to_float(total_expense),
         "balance": to_float(balance),
     }
+
+
+if FRONTEND_DIST_DIR.is_dir():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
+
+
+@app.get("/{frontend_path:path}", include_in_schema=False)
+async def frontend_application(frontend_path: str) -> FileResponse:
+    """Return the React SPA for browser routes while preserving API 404s."""
+
+    if frontend_path.startswith("api/"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found.")
+
+    index_file = FRONTEND_DIST_DIR / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Frontend build is not available.",
+        )
+
+    return FileResponse(index_file)

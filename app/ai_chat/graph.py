@@ -30,6 +30,10 @@ class AIChatCheckpointError(RuntimeError):
     """Raised when PostgreSQL checkpoint storage stays unavailable after a retry."""
 
 
+class AIChatProviderError(RuntimeError):
+    """Raised when Gemini exhausts the bounded retry budget for a chat turn."""
+
+
 class ChatGraphState(TypedDict, total=False):
     """Persisted LangGraph state; contents use append-only message semantics."""
 
@@ -37,6 +41,7 @@ class ChatGraphState(TypedDict, total=False):
     tool_calls: list[GeminiToolCall]
     tool_steps: int
     response: str
+    provider_unavailable: bool
 
 
 def _tool_response_part(call: GeminiToolCall, response: dict[str, Any]) -> dict[str, Any]:
@@ -57,12 +62,13 @@ async def assistant_node(state: ChatGraphState) -> ChatGraphState:
     try:
         turn = await generate_chat_turn(state.get("contents", []))
     except AIChatLLMError:
-        return {"response": SAFE_FAILURE_RESPONSE, "tool_calls": []}
+        return {"response": "", "tool_calls": [], "provider_unavailable": True}
 
     return {
         "contents": [turn.content],
         "tool_calls": turn.tool_calls,
         "response": turn.text,
+        "provider_unavailable": False,
     }
 
 
@@ -99,6 +105,8 @@ async def tools_node(state: ChatGraphState) -> ChatGraphState:
 
 
 def route_after_assistant(state: ChatGraphState) -> str:
+    if state.get("provider_unavailable"):
+        return "provider_error"
     if not state.get("tool_calls"):
         return "end"
     if state.get("tool_steps", 0) >= MAX_TOOL_STEPS:
@@ -119,7 +127,7 @@ def build_chat_graph(checkpointer: AsyncPostgresSaver):
     builder.add_conditional_edges(
         "assistant",
         route_after_assistant,
-        {"tools": "tools", "limit": "tool_limit", "end": END},
+        {"tools": "tools", "limit": "tool_limit", "provider_error": END, "end": END},
     )
     builder.add_edge("tools", "assistant")
     builder.add_edge("tool_limit", END)
@@ -164,6 +172,7 @@ async def run_chat_turn(graph: Any, conversation_id: UUID, message: str) -> str:
         "tool_steps": 0,
         "tool_calls": [],
         "response": "",
+        "provider_unavailable": False,
     }
     graph_config = {"configurable": {"thread_id": str(conversation_id)}}
 
@@ -177,6 +186,9 @@ async def run_chat_turn(graph: Any, conversation_id: UUID, message: str) -> str:
             # Managed PostgreSQL may replace an idle connection.  The pool
             # discards it; repeating once lets the next checkout use a new one.
             await asyncio.sleep(0.2)
+
+    if result.get("provider_unavailable"):
+        raise AIChatProviderError("Gemini is temporarily unavailable.")
 
     response = result.get("response", "").strip()
     return response or SAFE_FAILURE_RESPONSE

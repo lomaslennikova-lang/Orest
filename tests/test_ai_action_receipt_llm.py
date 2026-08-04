@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import io
+import json
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
-from app.ai_actions.receipt_llm import ReceiptDraftLLMError, _parse_receipt_response
+from app.ai_actions.receipt_llm import (
+    ReceiptDraftLLMError,
+    _analyse_receipt_sync,
+    _parse_receipt_response,
+)
 
 
 def gemini_json_response(value: str) -> dict:
@@ -67,3 +75,81 @@ class ReceiptDraftParsingTests(unittest.TestCase):
         ):
             with self.subTest(payload=payload), self.assertRaises(ReceiptDraftLLMError):
                 _parse_receipt_response(gemini_json_response(payload))
+
+
+class ReceiptDraftRetryTests(unittest.TestCase):
+    @staticmethod
+    def valid_response() -> io.BytesIO:
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": (
+                                            '{"status":"needs_clarification",'
+                                            '"message":"Вкажіть суму.",'
+                                            '"transactions":[]}'
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        )
+
+    def call_receipt_model(self):
+        return _analyse_receipt_sync(
+            content=b"receipt",
+            media_type="image/png",
+            filename="receipt.png",
+            user_message="Додай витрати.",
+            timeout=1,
+        )
+
+    def test_retries_a_transient_gemini_503_then_returns_draft(self):
+        unavailable = HTTPError(
+            "https://example.invalid",
+            503,
+            "Unavailable",
+            None,
+            io.BytesIO(),
+        )
+        with (
+            patch.dict("os.environ", {"LLM_API_KEY": "test-key"}, clear=False),
+            patch(
+                "app.ai_actions.receipt_llm.urlopen",
+                side_effect=[unavailable, self.valid_response()],
+            ) as urlopen_mock,
+            patch("app.ai_actions.receipt_llm.time.sleep") as sleep_mock,
+        ):
+            result = self.call_receipt_model()
+
+        self.assertEqual(result.result.status, "needs_clarification")
+        self.assertEqual(urlopen_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(0.5)
+        unavailable.close()
+
+    def test_does_not_retry_a_non_transient_gemini_error(self):
+        invalid_request = HTTPError(
+            "https://example.invalid",
+            400,
+            "Bad Request",
+            None,
+            io.BytesIO(),
+        )
+        with (
+            patch.dict("os.environ", {"LLM_API_KEY": "test-key"}, clear=False),
+            patch("app.ai_actions.receipt_llm.urlopen", side_effect=invalid_request) as urlopen_mock,
+            patch("app.ai_actions.receipt_llm.time.sleep") as sleep_mock,
+        ):
+            with self.assertRaisesRegex(ReceiptDraftLLMError, "rejected"):
+                self.call_receipt_model()
+
+        self.assertEqual(urlopen_mock.call_count, 1)
+        sleep_mock.assert_not_called()
+        invalid_request.close()

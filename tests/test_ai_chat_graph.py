@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from psycopg import OperationalError
 
-from app.ai_chat.graph import run_chat_turn
+from app.ai_chat.graph import AIChatProviderError, run_chat_turn
 
 
 class FlakyGraph:
@@ -30,3 +30,10 @@ class ChatGraphRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response, "Готово.")
         self.assertEqual(graph.calls, 2)
         sleep.assert_awaited_once_with(0.2)
+
+    async def test_raises_provider_error_when_graph_exhausts_gemini_retries(self):
+        graph = AsyncMock()
+        graph.ainvoke.return_value = {"response": "", "provider_unavailable": True}
+
+        with self.assertRaises(AIChatProviderError):
+            await run_chat_turn(graph, uuid4(), "Покажи витрати")
