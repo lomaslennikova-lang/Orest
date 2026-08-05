@@ -166,7 +166,7 @@ Render автоматично надає HTTPS для Web Service й вимаг�
 - PR перевірений і merge у `main` виконано тільки після підтвердження успішного
   deploy та вашого погодження.
 
-## 7. Наступний етап: приватне сховище Google Drive
+## 7. Запланований на той час етап: приватне сховище Google Drive
 
 Після завершення Lesson 13 окремо спланувати й погодити інтеграцію Google
 Drive API для receipt-файлів та audit-експорту. Для особистого навчального
@@ -227,3 +227,12 @@ Environment Variables. Назву моделі не потрібно hard-code �
 
 Цей backlog не є частиною Lesson 13 і має бути реалізований лише після
 окремого погодження API-контракту, UI-повідомлень, метрик і тестових сценаріїв.
+
+## 10. Реалізований наступний етап: приватне сховище Google Drive
+
+Після Lesson 13 реалізовано приватне зберігання нових AI-чеків у Google Drive
+через OAuth 2.0 Web application і scope `drive.file`. Інструкція з налаштування
+Google Cloud, Render Environment, локального запуску Alembic-міграції та
+перевірки доступна у [`docs/deploy/google_drive_integration.md`](../deploy/google_drive_integration.md)
+і [`docs/deploy.md`](../deploy.md). Audit export у Drive та автоматичний cleanup
+не входять до цього інкременту.

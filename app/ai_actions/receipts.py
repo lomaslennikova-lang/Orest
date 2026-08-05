@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_actions.runtime import AIRuntimeSettings
+from app.google_drive import GoogleDriveClient, get_google_drive_settings
 from app.models import AIReceiptAttachment
 
 
@@ -52,6 +53,7 @@ class StoredReceipt:
     content_sha256: str
     storage_key: str
     stored_at: datetime
+    drive_file_id: str | None = None
 
 
 def _normalise_filename(filename: str) -> str:
@@ -226,9 +228,50 @@ class ReceiptStorage:
             raise RuntimeError("Файл чеку тимчасово недоступний.") from error
 
 
+class ReceiptStorageRouter:
+    """Uses Drive when fully configured and keeps older local receipts readable."""
+
+    def __init__(self, settings: AIRuntimeSettings):
+        self._local = ReceiptStorage(settings)
+        drive_settings = get_google_drive_settings(require_refresh_token=False)
+        self._drive = GoogleDriveClient(drive_settings) if drive_settings and drive_settings.refresh_token else None
+
+    def store(self, content: bytes, filename: str) -> StoredReceipt:
+        if not self._drive:
+            return self._local.store(content, filename)
+        original_filename = _normalise_filename(filename)
+        validated = validate_receipt_content(content, original_filename)
+        drive_file_id = self._drive.upload(
+            content=content,
+            name=f"{uuid4().hex}{SUPPORTED_MEDIA_TYPES[validated.media_type]}",
+            media_type=validated.media_type,
+        )
+        return StoredReceipt(
+            original_filename=original_filename, media_type=validated.media_type,
+            byte_size=validated.byte_size, content_sha256=validated.content_sha256,
+            storage_key=f"drive/{uuid4().hex}", stored_at=datetime.now(timezone.utc),
+            drive_file_id=drive_file_id,
+        )
+
+    def read(self, storage_key: str, drive_file_id: str | None = None) -> bytes:
+        if drive_file_id:
+            if not self._drive:
+                raise RuntimeError("Google Drive is not configured.")
+            return self._drive.download(drive_file_id)
+        return self._local.read(storage_key)
+
+    def delete(self, storage_key: str, drive_file_id: str | None = None) -> None:
+        if drive_file_id:
+            if not self._drive:
+                raise RuntimeError("Google Drive is not configured.")
+            self._drive.delete(drive_file_id)
+            return
+        self._local.delete(storage_key)
+
+
 async def cleanup_expired_receipts(
     session: AsyncSession,
-    storage: ReceiptStorage,
+    storage: ReceiptStorageRouter,
     *,
     now: datetime | None = None,
 ) -> int:
@@ -240,6 +283,6 @@ async def cleanup_expired_receipts(
     )
     attachments = result.scalars().all()
     for attachment in attachments:
-        storage.delete(attachment.storage_key)
+        storage.delete(attachment.storage_key, attachment.drive_file_id)
         await session.delete(attachment)
     return len(attachments)

@@ -366,3 +366,32 @@ Orest.png
 ```
 
 Службові та секретні файли не наведені: `.env`, `.venv/`, `frontend/node_modules/`, frontend build-артефакти, `__pycache__/` і Git-метадані. Вони або ігноруються Git, або створюються локально.
+
+## Приватне сховище чеків у Google Drive
+
+Orest може зберігати нові AI-вкладення чеків у приватній папці Google Drive. За
+замовчуванням, до повного налаштування Drive, застосунок використовує локальне
+runtime-сховище; це зберігає сумісність із локальною розробкою. Після додавання
+refresh token нові чеки завантажуються у Drive, а в Neon зберігаються лише їхні
+метадані, хеш та `drive_file_id`. Файли не отримують публічних URL.
+
+Для інтеграції потрібні `Google Drive API`, OAuth client типу **Web application**
+і вузький scope `https://www.googleapis.com/auth/drive.file`.
+
+1. У Google Cloud додайте redirect URI:
+   `https://orest.onrender.com/api/admin/google-drive/callback`.
+2. У Render Environment додайте `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+   `GOOGLE_DRIVE_FOLDER_ID` і `GOOGLE_OAUTH_REDIRECT_URI`.
+3. Застосуйте Alembic-міграцію до Neon контрольовано з локальної машини:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m alembic upgrade head
+   ```
+
+4. Після deploy увійдіть як Admin та відкрийте
+   `https://orest.onrender.com/api/admin/google-drive/connect`.
+5. Після дозволу Google додайте одноразово показаний token як
+   `GOOGLE_DRIVE_REFRESH_TOKEN` у Render Environment та перезапустіть сервіс.
+
+Не передавайте жодне з цих значень у Git, логи або повідомлення. Докладна
+інструкція та діагностика — у [документації інтеграції Drive](docs/deploy/google_drive_integration.md).

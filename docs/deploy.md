@@ -162,3 +162,54 @@ powershell -ExecutionPolicy Bypass -File .\scripts\scan-secrets.ps1
 
 Перед push перегляньте `git diff --cached`. `.env` має бути ігнорованим, а
 `.env.example` — містити лише фіктивні шаблонні значення.
+
+## Google Drive для приватних AI-чеків
+
+Google Drive використовується лише для нових receipt-вкладень після повного
+налаштування OAuth. У Neon залишаються метадані вкладення, зокрема
+`drive_file_id`; посилання на файл не повертається frontend-у та файл не
+робиться публічним. Існуючі локальні вкладення лишаються доступними.
+
+### Environment Variables
+
+У Render Dashboard → **Environment** збережіть лише як secrets:
+
+| Змінна | Призначення |
+| --- | --- |
+| `GOOGLE_CLIENT_ID` | OAuth client ID типу Web application. |
+| `GOOGLE_CLIENT_SECRET` | Секрет цього OAuth client. |
+| `GOOGLE_DRIVE_FOLDER_ID` | ID приватної папки для чеків, не її URL. |
+| `GOOGLE_OAUTH_REDIRECT_URI` | `https://orest.onrender.com/api/admin/google-drive/callback`. |
+| `GOOGLE_DRIVE_REFRESH_TOKEN` | Довготривалий token, отриманий у завершенні OAuth. |
+
+Не задавайте ці значення у Dockerfile, Git або screenshots.
+
+### Підключення без Render Shell
+
+Render Free не надає Shell, тому міграцію треба запускати контрольовано локально
+з кореня проєкту. Перед командою переконайтеся, що локальний `.env` містить URL
+цільової Neon-бази:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+Поточний head для Drive-метаданих — `20260804_04`. Не додавайте `alembic upgrade
+head` до Docker command: перезапуски Free-сервісу не мають виконувати міграції.
+
+### OAuth і smoke check
+
+1. У Google Cloud увімкніть Google Drive API, створіть OAuth Web client і
+   зареєструйте точний callback URI.
+2. Додайте у Render усі змінні, крім refresh token, та задеплойте код.
+3. Увійдіть в Orest як Admin і відкрийте
+   `/api/admin/google-drive/connect` на домені Render.
+4. Після згоди Google callback показує token лише для початкового перенесення в
+   Render Environment. Додайте його, закрийте сторінку й перезапустіть сервіс.
+5. Завантажте тестовий чек: файл має з'явитися у приватній папці Drive без
+   доступу `anyone`/public, а AI-аналіз має прочитати його server-side.
+
+`401` для `/api/admin/google-drive/connect` означає відсутню або прострочену
+admin-сесію. `503` до першого OAuth-переходу означає, що одна з чотирьох
+початкових Google-змінних відсутня або порожня.
