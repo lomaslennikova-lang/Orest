@@ -1,17 +1,20 @@
 # План інтеграції приватного сховища Google Drive
 
-**Статус:** погоджено для реалізації.
+**Статус:** реалізовано для приватного зберігання нових AI-чеків; див. також
+розділ «Фактичний стан реалізації» наприкінці документа.
 
 ## 1. Межі рішення
 
-- Google Drive зберігає лише чеки та export audit-log; у Neon лишаються їхні
-  метадані й `drive_file_id`.
+- Google Drive зберігає нові AI-чеки; audit export поки залишається поза межами
+  реалізованого інкременту. У Neon лишаються метадані чеків і `drive_file_id`.
 - Файли не отримують permission `anyone` або `public` і не мають публічних URL.
 - Для особистого проєкту використовується один Google-акаунт і OAuth 2.0 Web
   application з offline access. Це дає серверу змогу оновлювати access token
   через refresh token.
 - Під час OAuth backend перевіряє одноразовий криптографічний параметр `state`.
-  Refresh token не передається frontend-у та не потрапляє до логів.
+  Для початкового bootstrap token показується лише автентифікованому Admin через
+  HTTPS callback, після чого зберігається тільки в Render Environment; він не
+  потрапляє до логів або БД.
 
 ## 2. Налаштування Google Cloud
 
@@ -102,3 +105,26 @@ scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-au
 - [OAuth 2.0 для web server applications](https://developers.google.com/identity/protocols/oauth2/web-server?authuser=19)
 - [OAuth 2.0 best practices](https://developers.google.com/identity/protocols/oauth2/resources/best-practices)
 - [Google Drive API scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
+
+## Фактичний стан реалізації
+
+**Статус:** реалізовано та перевірено для приватного зберігання нових
+AI-вкладень чеків.
+
+- `app/google_drive.py` реалізує server-side OAuth code flow і Drive upload,
+  download та delete через API.
+- Admin-only маршрут `/api/admin/google-drive/connect` створює криптографічний
+  `state`; callback перевіряє його через короткоживучу HttpOnly cookie.
+- Під час початкового підключення callback показує refresh token тільки
+  автентифікованому Admin через HTTPS, щоб його можна було негайно перенести в
+  Render Environment як `GOOGLE_DRIVE_REFRESH_TOKEN`. Token не записується у
+  БД або логи.
+- Міграція `20260804_04` додає `storage_backend` і `drive_file_id` до
+  `ai_receipt_attachments`. Старий `storage_key` не є ID Drive.
+- Коли OAuth-конфігурація або refresh token відсутні, нові чеки зберігаються у
+  локальному приватному runtime-сховищі. Це fallback, а не сталий storage на
+  Render Free.
+
+Поточна реалізація не переносить audit JSONL у Google Drive та не додає
+автоматичний scheduler retention cleanup. Це окремі наступні інкременти; не
+слід вважати їх уже розгорнутими.

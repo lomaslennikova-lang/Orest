@@ -64,3 +64,10 @@ AI-помічник успішно розпізнав чек, сформував
 - Free-план Render може призупиняти неактивний сервіс; перший запит після простою може виконуватися помітно довше.
 - Стабільність AI-відповідей також залежить від квот Gemini. Для демо обрано модель `gemini-flash-lite-latest` із відповідними лімітами.
 - Значення `DATABASE_URL`, `GEMINI_API_KEY`, `ADMIN_PASSWORD` та інші секрети зберігаються тільки в локальному `.env` або Render Environment Variables.
+
+## Після Lesson 13: Google Drive
+
+Приватне сховище нових AI-чеків у Google Drive підключено через OAuth 2.0 та
+перевірено в Render. Метадані та `drive_file_id` лишаються в Neon; файли не
+публікуються. Для змін схеми на Render Free міграцію запускають локально проти
+Neon, а не через Render Shell. Поточна інструкція: [Google Drive integration](google_drive_integration.md).
