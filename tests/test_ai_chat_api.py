@@ -17,6 +17,8 @@ class AIChatRouteTests(unittest.TestCase):
                 "/api/ai/actions/{action_id}/cancel",
                 "/api/ai/conversations/last",
                 "/api/ai/conversations/{conversation_id}/messages",
+                "/api/admin/google-drive/connect",
+                "/api/admin/google-drive/callback",
             }
             <= paths
         )

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -16,7 +17,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
@@ -35,7 +36,7 @@ from app.ai_actions.pending import (
     expire_open_actions_for_new_message,
 )
 from app.ai_actions.receipt_llm import ReceiptDraftLLMError, analyse_receipt_to_draft
-from app.ai_actions.receipts import MAX_RECEIPT_BYTES, ReceiptStorage, ReceiptValidationError
+from app.ai_actions.receipts import MAX_RECEIPT_BYTES, ReceiptStorageRouter, ReceiptValidationError
 from app.ai_actions.runtime import ensure_ai_runtime_directories, get_ai_runtime_settings
 from app.ai_actions.schemas import (
     ActionCancelResponse,
@@ -63,6 +64,13 @@ from app.ai_chat.schemas import ChatMessageCreate, ChatMessageView, ChatRequest,
 from app.database import AsyncSessionLocal, check_database_connection, init_database
 from app.llm import LLMRequestError, analyze_transactions
 from app.models import AIPendingAction, AIReceiptAttachment, Category, Transaction, User
+from app.google_drive import (
+    GoogleDriveConfigurationError,
+    GoogleDriveOAuthError,
+    build_authorization_url,
+    exchange_code,
+    get_google_drive_settings,
+)
 
 
 @asynccontextmanager
@@ -72,6 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ai_runtime_settings = get_ai_runtime_settings()
     ensure_ai_runtime_directories(ai_runtime_settings)
     app.state.ai_runtime_settings = ai_runtime_settings
+    app.state.receipt_storage = ReceiptStorageRouter(ai_runtime_settings)
     app.state.ai_chat_rate_limiter = ChatRateLimiter()
     async with open_chat_graph() as graph:
         app.state.ai_chat_graph = graph
@@ -80,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Orest Admin API", lifespan=lifespan)
 SESSION_COOKIE_NAME = "orest_admin_session"
+GOOGLE_OAUTH_STATE_COOKIE_NAME = "orest_google_oauth_state"
 SESSION_TTL_SECONDS = 60 * 60 * 8
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -423,7 +433,7 @@ async def upload_ai_receipt(
             detail="Розмір файла чеку не може перевищувати 5 МіБ.",
         )
 
-    storage = ReceiptStorage(request.app.state.ai_runtime_settings)
+    storage = request.app.state.receipt_storage
     try:
         stored = await asyncio.to_thread(storage.store, content, filename)
     except ReceiptValidationError as error:
@@ -442,6 +452,8 @@ async def upload_ai_receipt(
                 byte_size=stored.byte_size,
                 content_sha256=stored.content_sha256,
                 storage_key=stored.storage_key,
+                storage_backend="google_drive" if stored.drive_file_id else "local",
+                drive_file_id=stored.drive_file_id,
                 expires_at=stored.stored_at
                 + timedelta(days=request.app.state.ai_runtime_settings.receipt_retention_days),
             )
@@ -449,7 +461,7 @@ async def upload_ai_receipt(
             await session.commit()
             await session.refresh(attachment)
     except Exception:
-        await asyncio.to_thread(storage.delete, stored.storage_key)
+        await asyncio.to_thread(storage.delete, stored.storage_key, stored.drive_file_id)
         raise
 
     return serialize_receipt_attachment(attachment)
@@ -561,7 +573,7 @@ async def ai_chat(
             headers={"Retry-After": str(retry_after)},
         )
 
-    attachment_meta: tuple[str, str, str] | None = None
+    attachment_meta: tuple[str, str | None, str, str] | None = None
     admin_user_id: int
     async with AsyncSessionLocal() as session:
         admin_user = await get_admin_chat_user(session, admin_session)
@@ -597,6 +609,7 @@ async def ai_chat(
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail="Строк зберігання чеку минув.")
             attachment_meta = (
                 attachment.storage_key,
+                attachment.drive_file_id,
                 attachment.media_type,
                 attachment.original_filename,
             )
@@ -618,11 +631,12 @@ async def ai_chat(
 
     pending_action = None
     if attachment_meta is not None and payload.attachment_id is not None:
-        storage_key, media_type, filename = attachment_meta
+        storage_key, drive_file_id, media_type, filename = attachment_meta
         try:
             content = await asyncio.to_thread(
-                ReceiptStorage(request.app.state.ai_runtime_settings).read,
+                request.app.state.receipt_storage.read,
                 storage_key,
+                drive_file_id,
             )
             receipt_turn = await analyse_receipt_to_draft(
                 content=content,
@@ -921,6 +935,63 @@ async def summary(
         "total_expense": to_float(total_expense),
         "balance": to_float(balance),
     }
+
+
+@app.get("/api/admin/google-drive/connect")
+async def start_google_drive_connect(
+    response: Response,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> RedirectResponse:
+    """Start an Admin-only OAuth flow with a one-time CSRF state cookie."""
+
+    del admin_session
+    try:
+        settings = get_google_drive_settings(require_refresh_token=False)
+    except GoogleDriveConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+    if not settings:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google Drive is not configured.")
+    state = secrets.token_urlsafe(32)
+    redirect = RedirectResponse(build_authorization_url(settings, state), status_code=status.HTTP_302_FOUND)
+    redirect.set_cookie(
+        GOOGLE_OAUTH_STATE_COOKIE_NAME, state, httponly=True, samesite="lax",
+        secure=use_secure_session_cookie(), max_age=600,
+    )
+    return redirect
+
+
+@app.get("/api/admin/google-drive/callback")
+async def complete_google_drive_connect(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> HTMLResponse:
+    """Exchange the code and expose the bootstrap token once over Admin HTTPS."""
+
+    del admin_session
+    expected_state = request.cookies.get(GOOGLE_OAUTH_STATE_COOKIE_NAME)
+    if error or not code or not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google Drive authorization was not completed safely.")
+    try:
+        settings = get_google_drive_settings(require_refresh_token=False)
+        if not settings:
+            raise GoogleDriveConfigurationError("Google Drive is not configured.")
+        refresh_token = await asyncio.to_thread(exchange_code, settings, code)
+    except (GoogleDriveConfigurationError, GoogleDriveOAuthError) as oauth_error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google Drive authorization failed.") from oauth_error
+    response = HTMLResponse(
+        "<html><body><h1>Google Drive connected</h1>"
+        "<p>Copy this one-time token into Render as <code>GOOGLE_DRIVE_REFRESH_TOKEN</code>, then close this page. "
+        "Do not save it in Git or share it.</p><pre style='white-space:pre-wrap;word-break:break-all'>"
+        f"{refresh_token}</pre></body></html>",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    response.delete_cookie(GOOGLE_OAUTH_STATE_COOKIE_NAME)
+    return response
 
 
 if FRONTEND_DIST_DIR.is_dir():
