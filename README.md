@@ -47,7 +47,7 @@ python -m app.dev
 docker compose up --build
 ```
 
-## Розгортання в Render
+## Розгортання в Render та реєстрація DNS
 
 Production-версія застосунку розгортається як один Render Web Service: `Dockerfile.render` збирає React frontend, а FastAPI віддає SPA, `/api/*` та `/health` з одного HTTPS-домену.
 
