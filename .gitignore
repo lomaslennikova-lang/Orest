@@ -17,3 +17,8 @@ frontend/dist/
 
 # Runtime-вкладення чеків і audit-log AI-помічника.
 runtime/
+
+# Original domain-setup screenshots may contain account or application data.
+# Commit only the reviewed, redacted copies used by docs/domain.md.
+docs/deploy/DNS_*.PNG
+!docs/deploy/DNS_*_public.PNG

@@ -151,6 +151,62 @@ AI-чаті. У Render Logs дивитися лише HTTP-коди, deploy SHA 
 [Render Free](https://render.com/docs/free),
 [Gemini API errors](https://ai.google.dev/gemini-api/docs/api-errors).
 
+## Власний домен (NIC.UA)
+
+Для проєкту зареєстровано домен `orestweb.pp.ua`. Виконайте налаштування у
+такому порядку:
+
+1. Знайдіть або зареєструйте домен на [NIC.UA](https://nic.ua/uk/order).
+2. Перевірте список і стан своїх доменів у
+   [кабінеті NIC.UA](https://nic.ua/uk/my/domains).
+3. Для домену `.PP.UA` завершіть активацію через SMS або бот
+   [@ppuabot](https://t.me/ppuabot).
+4. У налаштуваннях домену підключіть NS-сервери NIC.UA:
+
+   ```text
+   ns10.uadns.com
+   ns11.uadns.com
+   ns12.uadns.com
+   ```
+
+5. Після створення Web Service додайте в Render Dashboard → **Settings** →
+   **Custom Domains** обидва імена:
+
+- `orestweb.pp.ua`
+- `www.orestweb.pp.ua`
+
+6. У DNS-зоні NIC.UA додайте записи, значення яких Render показує для вашого
+   сервісу:
+
+| Ім'я | TTL | Тип | Дані |
+| --- | ---: | --- | --- |
+| `@` | `3600` | `A` | `216.24.57.1` |
+| `www` | `3600` | `CNAME` | `orest.onrender.com.` |
+
+`@` означає кореневий домен `orestweb.pp.ua`. Запис `www` повинен містити
+саме повне доменне ім'я `orest.onrender.com.` з крапкою наприкінці. Без неї
+NIC.UA може перетворити значення на
+`orest.onrender.com.orestweb.pp.ua.`, і піддомен `www` не буде вказувати на
+Render.
+
+7. Дочекайтеся, коли Render покаже для домену статуси **Verified** та
+   **Certificate Issued**. Випуск SSL-сертифіката може початися лише після
+   поширення DNS-змін.
+8. Перевірте обидві адреси (`orestweb.pp.ua` та `www.orestweb.pp.ua`):
+
+   - сторінка відкривається через HTTPS без попередження сертифіката;
+   - `https://<ваш-домен>/health` повертає `200 {"status":"ok"}`;
+   - завантажується React SPA та працюють API-запити;
+   - `/health` підтверджує доступ застосунку до Neon через `SELECT 1`;
+   - у Render Logs немає помилок, пов'язаних із доменом, TLS або запуском
+     застосунку.
+
+Записи `mail`, `MX` та `ftp` належать до пошти або FTP і не потрібні для
+маршрутизації сайту; не змінюйте їх, якщо вони використовуються окремо.
+Після зміни DNS зачекайте щонайменше один TTL (тут — до години), а потім
+повторіть перевірку. Після підтвердження домену оновіть зовнішні callback URL,
+зокрема Google OAuth redirect URI, якщо він має працювати на власному домені.
+
 ## Git-гігієна перед PR
 
 ```powershell
