@@ -18,14 +18,6 @@ const dateFormatter = new Intl.DateTimeFormat("uk-UA", {
   timeStyle: "short",
 });
 
-const statusLabels = {
-  checking: "перевірка",
-  loading: "завантаження",
-  ready: "готово",
-  error: "помилка",
-  login: "вхід",
-};
-
 const typeLabels = {
   income: "Дохід",
   expense: "Витрата",
@@ -879,6 +871,12 @@ function App() {
             </button>
           ) : null}
         </nav>
+
+        <div className="sidebar-footer">
+          <button className="sidebar-logout" type="button" onClick={handleLogout}>
+            <span aria-hidden="true">↪</span> Вийти
+          </button>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -898,14 +896,6 @@ function App() {
                   ? "Запитуйте про доходи, витрати, категорії та динаміку"
                   : "Дані станом на поточний момент"}
             </p>
-          </div>
-          <div className="topbar-actions">
-            <span className={`pill ${status}`}>
-              {statusLabels[status] || status}
-            </span>
-            <button className="ghost-button" type="button" onClick={handleLogout}>
-              Вийти
-            </button>
           </div>
         </header>
 
