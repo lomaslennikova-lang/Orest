@@ -537,7 +537,36 @@ h2 {
 }
 
 .receipt-button {
+  background: #edf8f2;
+  border: 1px solid #9dceba;
+  border-radius: 6px;
+  color: #146c5c;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 8px 10px;
   white-space: nowrap;
+}
+
+.chat-month-select select:disabled,
+.chat-composer textarea:disabled {
+  background: #f3f5f4;
+  color: #7c8882;
+  cursor: not-allowed;
+}
+
+.receipt-button:hover {
+  background: #dff2e7;
+  border-color: #73b494;
+}
+
+.receipt-button:focus-visible {
+  outline: 3px solid #c7e5d4;
+  outline-offset: 2px;
+}
+
+.receipt-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .chat-receipt {

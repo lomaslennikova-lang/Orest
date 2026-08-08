@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from uuid import uuid4
+
+from pydantic import ValidationError
 
 from app.api import app
+from app.ai_chat.schemas import ChatRequest
 
 
 class AIChatRouteTests(unittest.TestCase):
@@ -22,3 +26,17 @@ class AIChatRouteTests(unittest.TestCase):
             }
             <= paths
         )
+
+    def test_chat_request_allows_clarification_for_existing_receipt(self):
+        request = ChatRequest(
+            message="Сума в чеку становить 500 грн.",
+            clarification_action_id=uuid4(),
+        )
+        self.assertIsNotNone(request.clarification_action_id)
+
+        with self.assertRaises(ValidationError):
+            ChatRequest(
+                message="Уточнення",
+                attachment_id=uuid4(),
+                clarification_action_id=uuid4(),
+            )

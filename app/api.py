@@ -574,6 +574,8 @@ async def ai_chat(
         )
 
     attachment_meta: tuple[str, str | None, str, str] | None = None
+    action_attachment_id: UUID | None = payload.attachment_id
+    is_clarification_retry = payload.clarification_action_id is not None
     admin_user_id: int
     async with AsyncSessionLocal() as session:
         admin_user = await get_admin_chat_user(session, admin_session)
@@ -596,10 +598,23 @@ async def ai_chat(
                     owner_user_id=admin_user.id,
                 )
 
-        if payload.attachment_id:
+        if payload.clarification_action_id:
+            clarification_action = await session.scalar(
+                select(AIPendingAction).where(
+                    AIPendingAction.id == payload.clarification_action_id,
+                    AIPendingAction.conversation_id == conversation.id,
+                    AIPendingAction.owner_user_id == admin_user.id,
+                    AIPendingAction.status == "needs_clarification",
+                )
+            )
+            if not clarification_action or not clarification_action.attachment_id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Чернетка вже недоступна для уточнення.")
+            action_attachment_id = clarification_action.attachment_id
+
+        if action_attachment_id:
             attachment = await session.scalar(
                 select(AIReceiptAttachment).where(
-                    AIReceiptAttachment.id == payload.attachment_id,
+                    AIReceiptAttachment.id == action_attachment_id,
                     AIReceiptAttachment.owner_user_id == admin_user.id,
                 )
             )
@@ -614,11 +629,12 @@ async def ai_chat(
                 attachment.original_filename,
             )
 
-        await expire_open_actions_for_new_message(
-            session,
-            conversation_id=conversation.id,
-            owner_user_id=admin_user.id,
-        )
+        if not is_clarification_retry:
+            await expire_open_actions_for_new_message(
+                session,
+                conversation_id=conversation.id,
+                owner_user_id=admin_user.id,
+            )
 
         await add_message(
             session,
@@ -630,7 +646,7 @@ async def ai_chat(
         await session.commit()
 
     pending_action = None
-    if attachment_meta is not None and payload.attachment_id is not None:
+    if attachment_meta is not None and action_attachment_id is not None:
         storage_key, drive_file_id, media_type, filename = attachment_meta
         try:
             content = await asyncio.to_thread(
@@ -653,6 +669,12 @@ async def ai_chat(
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         try:
             async with AsyncSessionLocal() as session:
+                if is_clarification_retry:
+                    await expire_open_actions_for_new_message(
+                        session,
+                        conversation_id=conversation_id,
+                        owner_user_id=admin_user_id,
+                    )
                 if receipt_turn.result.status == "pending_confirmation":
                     pending_action = await create_pending_expense_action(
                         session,
@@ -661,7 +683,7 @@ async def ai_chat(
                         draft=ExpenseActionDraft(
                             transactions=receipt_turn.result.transactions,
                         ),
-                        attachment_id=payload.attachment_id,
+                        attachment_id=action_attachment_id,
                         expires_at=expires_at,
                     )
                 else:
@@ -670,7 +692,7 @@ async def ai_chat(
                         conversation_id=conversation_id,
                         owner_user_id=admin_user_id,
                         clarification=receipt_turn.result.message,
-                        attachment_id=payload.attachment_id,
+                        attachment_id=action_attachment_id,
                         expires_at=expires_at,
                     )
                 await session.commit()

@@ -44,6 +44,10 @@ const RECEIPT_ACCEPTED_TYPES = new Set([
 ]);
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 const RECEIPT_DEFAULT_MESSAGE = "Проаналізуй прикріплений чек і підготуй чернетку витрати.";
+const OPEN_PENDING_ACTION_STATUSES = new Set([
+  "needs_clarification",
+  "pending_confirmation",
+]);
 
 function formatCurrency(value) {
   return currencyFormatter.format(Number(value || 0));
@@ -214,25 +218,17 @@ function App() {
   );
 
   const chatMonthOptions = useMemo(() => {
-    const transactionDates = transactions
+    return [...new Set(transactions
       .map((transaction) => getDateKey(transaction.created_at))
       .filter(Boolean)
-      .sort();
-    const firstMonth = transactionDates[0]?.slice(0, 7) || getCurrentMonth();
-    const lastMonth = getCurrentMonth();
-    const months = [];
-    const cursor = new Date(`${firstMonth}-01T00:00:00`);
-    const last = new Date(`${lastMonth}-01T00:00:00`);
-
-    while (cursor <= last) {
-      months.push(
-        `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`,
-      );
-      cursor.setMonth(cursor.getMonth() + 1);
-    }
-
-    return months.reverse();
+      .map((date) => date.slice(0, 7)))].sort().reverse();
   }, [transactions]);
+
+  useEffect(() => {
+    setChatMonth((previousMonth) => (
+      chatMonthOptions.includes(previousMonth) ? previousMonth : (chatMonthOptions[0] || "")
+    ));
+  }, [chatMonthOptions]);
 
   const isAiBusy =
     analysisStatus === "loading" || chatStatus === "loading" || actionBusyId !== null;
@@ -613,7 +609,18 @@ function App() {
       setReceiptError("Розмір чеку не може перевищувати 5 МіБ.");
       return;
     }
+
+    const openDraft = chatMessages.find((message) => (
+      OPEN_PENDING_ACTION_STATUSES.has(message.pendingAction?.status)
+    ));
+    if (openDraft && !window.confirm(
+      "Є чернетка, яка ще очікує на обробку. Після надсилання нового чека вона стане недоступною. Проігнорувати її та продовжити?",
+    )) {
+      return;
+    }
+
     setReceiptFile(file);
+    setChatDraft((previousDraft) => previousDraft.trim() || RECEIPT_DEFAULT_MESSAGE);
   }
 
   async function uploadReceipt(file) {
@@ -672,6 +679,11 @@ function App() {
       setChatMessages((previousMessages) => [...previousMessages, pendingMessage]);
 
       const uploadedReceipt = file ? await uploadReceipt(file) : null;
+      const clarificationAction = file
+        ? null
+        : chatMessages.find((chatMessage) => (
+          chatMessage.pendingAction?.status === "needs_clarification"
+        ))?.pendingAction;
 
       const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
         method: "POST",
@@ -681,6 +693,7 @@ function App() {
           message: normalizedMessage,
           conversation_id: chatConversationId,
           attachment_id: uploadedReceipt?.id || null,
+          clarification_action_id: clarificationAction?.id || null,
         }),
       });
 
@@ -706,11 +719,18 @@ function App() {
         setReceiptFile(null);
       }
       setChatMessages((previousMessages) => [
-        ...previousMessages.map((chatMessage) =>
-          chatMessage.id === pendingMessage.id
-            ? { ...chatMessage, pending: false }
-            : chatMessage,
-        ),
+        ...previousMessages.map((chatMessage) => {
+          if (chatMessage.id === pendingMessage.id) {
+            return { ...chatMessage, pending: false };
+          }
+          if (OPEN_PENDING_ACTION_STATUSES.has(chatMessage.pendingAction?.status)) {
+            return {
+              ...chatMessage,
+              pendingAction: { ...chatMessage.pendingAction, status: "expired" },
+            };
+          }
+          return chatMessage;
+        }),
         pendingAction ? { ...data.message, pendingAction } : data.message,
       ]);
       setChatStatus("idle");
@@ -1325,6 +1345,15 @@ function AiChatPanel({
 }) {
   const isLoading = chatStatus === "loading";
   const isDisabled = isLoading || disabledByAnalysis || disabledByAction;
+  const hasPendingConfirmation = chatMessages.some((message) => (
+    message.pendingAction?.status === "pending_confirmation"
+  ));
+  const hasClarificationRequest = chatMessages.some((message) => (
+    message.pendingAction?.status === "needs_clarification"
+  ));
+  const composerDisabled = isDisabled || hasPendingConfirmation;
+  const selectionDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
+  const hasChatMonths = chatMonthOptions.length > 0;
   const chatHistoryRef = useRef(null);
   const receiptInputRef = useRef(null);
 
@@ -1388,10 +1417,11 @@ function AiChatPanel({
         <label className="chat-month-select">
           Місяць для підказок
           <select
-            disabled={isDisabled}
+            disabled={selectionDisabled || !hasChatMonths}
             value={chatMonth}
             onChange={(event) => onChangeMonth(event.target.value)}
           >
+            {!hasChatMonths ? <option value="">Немає місяців із даними</option> : null}
             {chatMonthOptions.map((month) => (
               <option key={month} value={month}>
                 {formatMonth(month)}
@@ -1403,7 +1433,7 @@ function AiChatPanel({
           {chatSuggestions.map((suggestion) => (
             <button
               className="suggestion-button"
-              disabled={isDisabled}
+              disabled={selectionDisabled || !hasChatMonths}
               key={suggestion}
               type="button"
               onClick={() => onSuggestion(suggestion)}
@@ -1436,6 +1466,18 @@ function AiChatPanel({
         </p>
       ) : null}
 
+      {hasPendingConfirmation ? (
+        <p className="chat-blocking-message">
+          Спершу підтвердьте або скасуйте поточну чернетку, щоб продовжити діалог.
+        </p>
+      ) : null}
+
+      {hasClarificationRequest ? (
+        <p className="chat-blocking-message">
+          Дайте текстове уточнення для поточного чека. Новий чек і швидкі підказки тимчасово недоступні.
+        </p>
+      ) : null}
+
       {receiptError ? <div className="notice chat-receipt-error">{receiptError}</div> : null}
 
       {receiptFile ? (
@@ -1457,7 +1499,7 @@ function AiChatPanel({
           Повідомлення для AI-помічника
         </label>
         <textarea
-          disabled={isDisabled}
+          disabled={composerDisabled}
           id="ai-chat-message"
           maxLength="2000"
           placeholder="Наприклад: які витрати були найбільшими цього місяця?"
@@ -1475,7 +1517,7 @@ function AiChatPanel({
           <input
             accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
             className="sr-only"
-            disabled={isDisabled}
+            disabled={selectionDisabled}
             ref={receiptInputRef}
             type="file"
             onChange={(event) => {
@@ -1484,8 +1526,8 @@ function AiChatPanel({
             }}
           />
           <button
-            className="ghost-button receipt-button"
-            disabled={isDisabled}
+            className="receipt-button"
+            disabled={selectionDisabled}
             type="button"
             onClick={() => receiptInputRef.current?.click()}
           >
@@ -1493,7 +1535,7 @@ function AiChatPanel({
           </button>
           <button
             className="primary-button"
-            disabled={isDisabled || (!chatDraft.trim() && !receiptFile)}
+            disabled={composerDisabled || (!chatDraft.trim() && !receiptFile)}
             type="submit"
           >
             {isLoading ? "⌛ Надсилаємо…" : "Надіслати"}
@@ -1509,7 +1551,15 @@ function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpen
     return (
       <div className="pending-action clarification-action">
         <strong>Потрібне уточнення</strong>
-        <span>Надайте запитувану інформацію в наступному повідомленні разом із цим чеком.</span>
+        <span>Надайте запитувану інформацію в наступному повідомленні. Ми повторно проаналізуємо цей чек.</span>
+        <button
+          className="ghost-button danger-button"
+          disabled={disabled || busy}
+          type="button"
+          onClick={() => onCancel(action.id)}
+        >
+          Скасувати чернетку
+        </button>
       </div>
     );
   }
@@ -1536,9 +1586,25 @@ function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpen
   }
 
   if (action.status === "cancelled" || action.status === "expired" || action.status === "failed") {
+    const unavailableDraft = {
+      cancelled: {
+        title: "Чернетку скасовано",
+        description: "Її більше не можна обробити.",
+      },
+      expired: {
+        title: "Термін обробки чернетки минув",
+        description: "Створіть нову чернетку, щоб продовжити.",
+      },
+      failed: {
+        title: "Не вдалося обробити чернетку",
+        description: "Створіть нову чернетку та спробуйте ще раз.",
+      },
+    }[action.status];
+
     return (
       <div className="pending-action cancelled-action">
-        <strong>{action.status === "cancelled" ? "Дію скасовано" : "Чернетка недоступна"}</strong>
+        <strong>{unavailableDraft.title}</strong>
+        <span>{unavailableDraft.description}</span>
       </div>
     );
   }
