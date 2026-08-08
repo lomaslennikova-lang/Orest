@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (
   import.meta.env.DEV ? "http://localhost:8000" : ""
 );
+const appVariant = (import.meta.env.VITE_APP_VARIANT ?? (
+  import.meta.env.DEV ? "local" : "web"
+)).trim().toLowerCase();
+const appName = appVariant === "local" ? "Orest Local" : "Orest Web";
 
 const currencyFormatter = new Intl.NumberFormat("uk-UA", {
   style: "currency",
@@ -180,6 +184,10 @@ function App() {
 
   const isAdmin = currentUser?.role === "admin";
   const currentDateTimeLocal = getCurrentDateTimeLocal();
+
+  useEffect(() => {
+    document.title = `${appName} — адмінка`;
+  }, []);
 
   const userOptions = useMemo(() => {
     return [...new Set(transactions.map((transaction) => transaction.user))].sort(
@@ -789,7 +797,7 @@ function App() {
           <div className="brand login-brand">
             <div className="brand-mark">O</div>
             <div>
-              <div className="brand-name">Orest</div>
+              <div className="brand-name">{appName}</div>
               <div className="brand-subtitle">Адмінка</div>
             </div>
           </div>
@@ -839,7 +847,7 @@ function App() {
         <div className="brand">
           <div className="brand-mark">O</div>
           <div>
-            <div className="brand-name">Orest</div>
+            <div className="brand-name">{appName}</div>
             <div className="brand-subtitle">Адмінка</div>
           </div>
         </div>
