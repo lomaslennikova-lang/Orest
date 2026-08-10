@@ -537,8 +537,8 @@ h2 {
 }
 
 .receipt-button {
-  background: #edf8f2;
-  border: 1px solid #9dceba;
+  background: #cbe9db;
+  border: 1px solid #73b494;
   border-radius: 6px;
   color: #146c5c;
   cursor: pointer;
@@ -555,8 +555,8 @@ h2 {
 }
 
 .receipt-button:hover {
-  background: #dff2e7;
-  border-color: #73b494;
+  background: #a9d8c2;
+  border-color: #4d9477;
 }
 
 .receipt-button:focus-visible {
@@ -623,6 +623,42 @@ h2 {
   gap: 6px;
 }
 
+.partial-draft,
+.clarification-issues {
+  display: grid;
+  gap: 8px;
+}
+
+.partial-draft > strong {
+  color: #146c5c;
+  font-size: 13px;
+}
+
+.clarification-issues > strong {
+  color: #a23d3d;
+  font-size: 13px;
+}
+
+.clarification-issue {
+  background: #fff7f7;
+  border-left: 3px solid #d98d8d;
+  border-radius: 4px;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+}
+
+.clarification-issue > strong {
+  color: #a23d3d;
+  font-size: 12px;
+}
+
+.clarification-issue > span {
+  color: #56635d;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .pending-transaction {
   align-items: center;
   display: grid;
@@ -635,6 +671,99 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.draft-operation-date {
+  color: #56635d;
+  display: grid;
+  font-size: 13px;
+  font-weight: 750;
+  gap: 6px;
+}
+
+.draft-operation-date input,
+.draft-row input {
+  border: 1px solid #cdd8d3;
+  border-radius: 6px;
+  min-width: 0;
+  padding: 8px 9px;
+  width: 100%;
+}
+
+.draft-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 32px minmax(150px, 1fr) minmax(100px, 150px);
+}
+
+.draft-row-heading {
+  color: #69766f;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.draft-row > :last-child {
+  text-align: right;
+}
+
+.draft-action-buttons {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  margin-top: 6px;
+}
+
+.draft-action-buttons .receipt-button {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.draft-action-buttons .primary-button {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: end;
+}
+
+.draft-action-buttons .danger-button {
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: start;
+}
+
+.draft-row-issue {
+  background: #fff0f0;
+  border-left: 3px solid #d97777;
+  border-radius: 4px;
+  padding: 7px;
+}
+
+.receipt-preview {
+  background: #ffffff;
+  border-left: 1px solid #dde5e1;
+  bottom: 0;
+  box-shadow: -8px 0 24px rgba(27, 36, 32, 0.12);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: min(520px, 46vw);
+  z-index: 20;
+}
+
+.receipt-preview-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.receipt-preview-frame {
+  border: 0;
+  height: 100%;
+  width: 100%;
 }
 
 .danger-button {

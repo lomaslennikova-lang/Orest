@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.ai_actions.pending import ExpenseTransactionDraft
+from app.ai_actions.pending import ClarificationIssue, ExpenseTransactionDraft
 from app.ai_actions.prompts import RECEIPT_DRAFT_SYSTEM_PROMPT
 from app.llm import GEMINI_MODELS_URL
 
@@ -37,13 +37,16 @@ class ReceiptDraftResponse(BaseModel):
     status: Literal["pending_confirmation", "needs_clarification"]
     message: str = Field(min_length=1, max_length=2_000)
     transactions: list[ExpenseTransactionDraft] = Field(default_factory=list, max_length=20)
+    issues: list[ClarificationIssue] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_status_payload(self) -> "ReceiptDraftResponse":
         if self.status == "pending_confirmation" and not self.transactions:
             raise ValueError("pending_confirmation requires transactions")
-        if self.status == "needs_clarification" and self.transactions:
-            raise ValueError("needs_clarification must not include transactions")
+        if self.status == "pending_confirmation" and self.issues:
+            raise ValueError("pending_confirmation must not include issues")
+        if self.status == "needs_clarification" and not self.issues:
+            raise ValueError("needs_clarification requires issues")
         return self
 
 

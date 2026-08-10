@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pydantic import ValidationError
 
-from app.ai_actions.pending import ExpenseActionDraft
+from app.ai_actions.pending import ClarificationActionDraft, ExpenseActionDraft
 from app.ai_actions.transactions import (
     TransactionCreateData,
     TransactionValidationError,
@@ -15,6 +15,24 @@ from app.ai_actions.transactions import (
 
 
 class PendingActionSchemaTests(unittest.TestCase):
+    def test_partial_draft_requires_a_clear_issue(self):
+        draft = ClarificationActionDraft.model_validate(
+            {
+                "transactions": [],
+                "issues": [
+                    {
+                        "line_number": 1,
+                        "category": "Продукти",
+                        "amount": None,
+                    }
+                ],
+            }
+        )
+        self.assertEqual(draft.issues[0].line_number, 1)
+
+        with self.assertRaises(ValidationError):
+            ClarificationActionDraft.model_validate({"transactions": [], "issues": []})
+
     def test_draft_accepts_only_expense_and_serialises_snapshot(self):
         draft = ExpenseActionDraft.model_validate(
             {

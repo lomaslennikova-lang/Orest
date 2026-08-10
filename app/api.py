@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
@@ -28,12 +29,14 @@ from app.ai_actions.pending import (
     PendingActionExpiredError,
     PendingActionNotFoundError,
     PendingActionStateError,
+    ClarificationActionDraft,
     ExpenseActionDraft,
     cancel_pending_action,
     confirm_pending_action,
     create_clarification_action,
     create_pending_expense_action,
     expire_open_actions_for_new_message,
+    update_pending_action_draft,
 )
 from app.ai_actions.receipt_llm import ReceiptDraftLLMError, analyse_receipt_to_draft
 from app.ai_actions.receipts import MAX_RECEIPT_BYTES, ReceiptStorageRouter, ReceiptValidationError
@@ -42,6 +45,7 @@ from app.ai_actions.schemas import (
     ActionCancelResponse,
     ActionConfirmResponse,
     PendingActionView,
+    PendingDraftUpdate,
     ReceiptAttachmentView,
 )
 from app.ai_actions.transactions import (
@@ -73,6 +77,9 @@ from app.google_drive import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await check_database_connection()
@@ -100,7 +107,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -489,6 +496,81 @@ async def get_ai_action(
         return serialize_pending_action(action)
 
 
+@app.put("/api/ai/actions/{action_id}/draft", response_model=PendingActionView)
+async def update_ai_action_draft(
+    action_id: UUID,
+    payload: PendingDraftUpdate,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> PendingActionView:
+    action_error: PendingActionError | None = None
+    action = None
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            admin_user = await get_admin_chat_user(session, admin_session)
+            draft = ExpenseActionDraft(
+                transactions=[
+                    {
+                        "created_at": payload.operation_at,
+                        "amount": row.amount,
+                        "category": row.category,
+                        "line_number": row.line_number,
+                    }
+                    for row in payload.rows
+                ]
+            )
+            try:
+                action = await update_pending_action_draft(
+                    session,
+                    action_id=action_id,
+                    owner_user_id=admin_user.id,
+                    draft=draft,
+                )
+            except (PendingActionNotFoundError, PendingActionExpiredError, PendingActionStateError) as error:
+                # Keep an expired state written by the action service instead of
+                # rolling it back by raising from inside the transaction.
+                action_error = error
+        if action_error:
+            raise _pending_action_http_error(action_error)
+    assert action is not None
+    return serialize_pending_action(action)
+
+
+@app.get("/api/ai/actions/{action_id}/receipt")
+async def get_ai_action_receipt(
+    action_id: UUID,
+    request: Request,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> Response:
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        action = await session.scalar(
+            select(AIPendingAction).where(
+                AIPendingAction.id == action_id,
+                AIPendingAction.owner_user_id == admin_user.id,
+            )
+        )
+        if not action or not action.attachment_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чек не знайдено.")
+        attachment = await session.scalar(
+            select(AIReceiptAttachment).where(
+                AIReceiptAttachment.id == action.attachment_id,
+                AIReceiptAttachment.owner_user_id == admin_user.id,
+            )
+        )
+        if not attachment or attachment.expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail="Строк зберігання чеку минув.")
+        content = await asyncio.to_thread(
+            request.app.state.receipt_storage.read,
+            attachment.storage_key,
+            attachment.drive_file_id,
+        )
+    return Response(
+        content=content,
+        media_type=attachment.media_type,
+        headers={"Content-Disposition": f'inline; filename="{attachment.original_filename}"'},
+    )
+
+
 @app.post("/api/ai/actions/{action_id}/confirm", response_model=ActionConfirmResponse)
 async def confirm_ai_action(
     action_id: UUID,
@@ -661,6 +743,7 @@ async def ai_chat(
                 user_message=payload.message,
             )
         except (RuntimeError, ReceiptDraftLLMError) as error:
+            logger.warning("Receipt analysis failed: %s", error)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Не вдалося проаналізувати чек. Спробуйте ще раз трохи згодом.",
@@ -691,7 +774,10 @@ async def ai_chat(
                         session,
                         conversation_id=conversation_id,
                         owner_user_id=admin_user_id,
-                        clarification=receipt_turn.result.message,
+                        draft=ClarificationActionDraft(
+                            transactions=receipt_turn.result.transactions,
+                            issues=receipt_turn.result.issues,
+                        ),
                         attachment_id=action_attachment_id,
                         expires_at=expires_at,
                     )

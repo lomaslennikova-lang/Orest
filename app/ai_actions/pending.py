@@ -49,6 +49,7 @@ class ExpenseTransactionDraft(BaseModel):
     amount: Decimal = Field(gt=0, le=Decimal("100000"))
     category: str = Field(min_length=1, max_length=255)
     type: Literal["expense"] = "expense"
+    line_number: int | None = Field(default=None, ge=1, le=20)
 
     @field_validator("category")
     @classmethod
@@ -67,6 +68,35 @@ class ExpenseActionDraft(BaseModel):
     transactions: list[ExpenseTransactionDraft] = Field(min_length=1, max_length=20)
 
 
+class ClarificationIssue(BaseModel):
+    """One receipt position that cannot be safely converted into an expense yet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    line_number: int = Field(ge=1, le=20)
+    category: str | None = Field(default=None, max_length=255)
+    amount: Decimal | None = Field(default=None, gt=0, le=Decimal("100000"))
+
+    @field_validator("category")
+    @classmethod
+    def normalise_category(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalised = value.strip()
+        if not normalised:
+            return None
+        return normalised
+
+
+class ClarificationActionDraft(BaseModel):
+    """Partial safe receipt data plus the exact records that need clarification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transactions: list[ExpenseTransactionDraft] = Field(default_factory=list, max_length=20)
+    issues: list[ClarificationIssue] = Field(min_length=1, max_length=20)
+
+
 class ConfirmedActionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,6 +108,33 @@ class ConfirmedActionResult(BaseModel):
 def _current_time(now: datetime | None) -> datetime:
     value = now or datetime.now(timezone.utc)
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _normalise_draft_transactions(
+    transactions: list[ExpenseTransactionDraft],
+) -> list[ExpenseTransactionDraft]:
+    try:
+        normalised_transactions = []
+        for transaction in transactions:
+            normalised = normalise_transaction_data(
+                TransactionCreateData(
+                    created_at=transaction.created_at,
+                    amount=transaction.amount,
+                    category=transaction.category,
+                    transaction_type=transaction.type,
+                )
+            )
+            normalised_transactions.append(
+                ExpenseTransactionDraft(
+                    created_at=normalised.created_at,
+                    amount=normalised.amount,
+                    category=normalised.category,
+                    line_number=transaction.line_number,
+                )
+            )
+        return normalised_transactions
+    except TransactionValidationError as error:
+        raise PendingActionStateError("Pending action contains an invalid draft.") from error
 
 
 async def create_pending_expense_action(
@@ -110,27 +167,7 @@ async def create_pending_expense_action(
         if not attachment:
             raise PendingActionNotFoundError("Receipt attachment not found.")
 
-    try:
-        normalised_transactions = []
-        for transaction in draft.transactions:
-            normalised = normalise_transaction_data(
-                TransactionCreateData(
-                    created_at=transaction.created_at,
-                    amount=transaction.amount,
-                    category=transaction.category,
-                    transaction_type=transaction.type,
-                )
-            )
-            normalised_transactions.append(
-                ExpenseTransactionDraft(
-                    created_at=normalised.created_at,
-                    amount=normalised.amount,
-                    category=normalised.category,
-                )
-            )
-    except TransactionValidationError as error:
-        raise PendingActionStateError("Pending action contains an invalid draft.") from error
-
+    normalised_transactions = _normalise_draft_transactions(draft.transactions)
     normalised_draft = ExpenseActionDraft(transactions=normalised_transactions)
     action = AIPendingAction(
         conversation_id=conversation_id,
@@ -150,11 +187,11 @@ async def create_clarification_action(
     *,
     conversation_id: UUID,
     owner_user_id: int,
-    clarification: str,
+    draft: ClarificationActionDraft,
     expires_at: datetime,
     attachment_id: UUID | None = None,
 ) -> AIPendingAction:
-    """Persist a no-write state that records the exact information still needed."""
+    """Persist safe partial data and exact questions without making it executable."""
 
     conversation = await session.scalar(
         select(AIConversation).where(
@@ -174,12 +211,16 @@ async def create_clarification_action(
         if not attachment:
             raise PendingActionNotFoundError("Receipt attachment not found.")
 
+    normalised_draft = ClarificationActionDraft(
+        transactions=_normalise_draft_transactions(draft.transactions),
+        issues=draft.issues,
+    )
     action = AIPendingAction(
         conversation_id=conversation_id,
         owner_user_id=owner_user_id,
         attachment_id=attachment_id,
         status="needs_clarification",
-        draft_payload={"clarification": clarification, "transactions": []},
+        draft_payload=normalised_draft.model_dump(mode="json"),
         expires_at=_current_time(expires_at),
     )
     session.add(action)
@@ -250,6 +291,38 @@ async def cancel_pending_action(
         raise PendingActionStateError("Pending action cannot be cancelled.")
     action.status = "cancelled"
     action.completed_at = current_time
+    await session.flush()
+    return action
+
+
+async def update_pending_action_draft(
+    session: AsyncSession,
+    *,
+    action_id: UUID,
+    owner_user_id: int,
+    draft: ExpenseActionDraft,
+    now: datetime | None = None,
+) -> AIPendingAction:
+    """Save a validated receipt draft while it is still awaiting confirmation."""
+
+    action = await _get_owned_action_for_update(
+        session,
+        action_id=action_id,
+        owner_user_id=owner_user_id,
+    )
+    current_time = _current_time(now)
+    if action.expires_at <= current_time:
+        action.status = "expired"
+        action.completed_at = current_time
+        raise PendingActionExpiredError("Pending action has expired.")
+    if action.status not in {"needs_clarification", "pending_confirmation"}:
+        raise PendingActionStateError("Pending action cannot be updated.")
+
+    normalised_draft = ExpenseActionDraft(
+        transactions=_normalise_draft_transactions(draft.transactions),
+    )
+    action.draft_payload = normalised_draft.model_dump(mode="json")
+    action.status = "pending_confirmation"
     await session.flush()
     return action
 

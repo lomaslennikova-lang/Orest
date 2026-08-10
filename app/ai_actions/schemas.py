@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
@@ -37,6 +38,21 @@ class PendingActionView(BaseModel):
     expires_at: datetime
     completed_at: datetime | None = None
     created_transaction_ids: list[int] | None = None
+
+
+class DraftRowUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    line_number: int | None = Field(default=None, ge=1, le=20)
+    category: str = Field(min_length=1, max_length=255)
+    amount: Decimal = Field(gt=0, le=Decimal("100000"))
+
+
+class PendingDraftUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_at: datetime
+    rows: list[DraftRowUpdate] = Field(min_length=1, max_length=20)
 
 
 class ActionCancelResponse(BaseModel):

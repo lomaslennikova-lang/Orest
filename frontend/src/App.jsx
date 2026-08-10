@@ -177,6 +177,7 @@ function App() {
   const [receiptFile, setReceiptFile] = useState(null);
   const [receiptError, setReceiptError] = useState("");
   const [actionBusyId, setActionBusyId] = useState(null);
+  const [receiptPreviewActionId, setReceiptPreviewActionId] = useState(null);
 
   const isAdmin = currentUser?.role === "admin";
   const currentDateTimeLocal = getCurrentDateTimeLocal();
@@ -769,6 +770,20 @@ function App() {
         } catch {
           // Keep the safe fallback when the API response has no JSON body.
         }
+        if (response.status === 409 || response.status === 410) {
+          try {
+            const refreshedAction = await getPendingAction(actionId);
+            setChatMessages((previousMessages) =>
+              previousMessages.map((chatMessage) => (
+                chatMessage.pendingAction?.id === actionId
+                  ? { ...chatMessage, pendingAction: refreshedAction }
+                  : chatMessage
+              )),
+            );
+          } catch {
+            // Keep the original action error when its refreshed state is unavailable.
+          }
+        }
         throw new Error(message);
       }
       const result = await response.json();
@@ -792,6 +807,50 @@ function App() {
       }
     } catch (actionError) {
       setChatError(actionError.message);
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleResolveDraft(actionId, draft) {
+    try {
+      setActionBusyId(actionId);
+      const response = await fetch(`${API_BASE_URL}/api/ai/actions/${actionId}/draft`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(draft),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 409 || response.status === 410) {
+          try {
+            const refreshedAction = await getPendingAction(actionId);
+            setChatMessages((messages) => messages.map((message) => (
+              message.pendingAction?.id === actionId
+                ? { ...message, pendingAction: refreshedAction }
+                : message
+            )));
+            // The updated card explains why the draft is unavailable; do not
+            // repeat the same state as a global chat error.
+            setChatError("");
+            return false;
+          } catch {
+            // Keep the original error when the action state cannot be refreshed.
+          }
+        }
+        throw new Error(data.detail || "Не вдалося оновити чернетку.");
+      }
+      const updatedAction = await response.json();
+      setChatMessages((messages) => messages.map((message) => (
+        message.pendingAction?.id === actionId
+          ? { ...message, pendingAction: updatedAction }
+          : message
+      )));
+      return true;
+    } catch (draftError) {
+      setChatError(draftError.message);
+      return false;
     } finally {
       setActionBusyId(null);
     }
@@ -1102,20 +1161,44 @@ function App() {
             receiptError={receiptError}
             receiptFile={receiptFile}
             actionBusyId={actionBusyId}
+            categoryOptions={categoryOptions}
             onChangeDraft={setChatDraft}
             onChangeMonth={setChatMonth}
             onClearReceipt={() => {
               setReceiptFile(null);
               setReceiptError("");
             }}
-            onConfirmAction={(actionId) => handlePendingAction(actionId, "confirm")}
-            onCancelAction={(actionId) => handlePendingAction(actionId, "cancel")}
+            onConfirmAction={(actionId) => {
+              setReceiptPreviewActionId(null);
+              handlePendingAction(actionId, "confirm");
+            }}
+            onCancelAction={(actionId) => {
+              setReceiptPreviewActionId(null);
+              handlePendingAction(actionId, "cancel");
+            }}
             onOpenFinance={openFinanceAfterAction}
+            onResolveDraft={handleResolveDraft}
+            onShowReceipt={setReceiptPreviewActionId}
             onSelectReceipt={selectReceiptFile}
             onRetry={() => sendChatMessage(lastChatMessage)}
             onSubmit={handleChatSubmit}
             onSuggestion={sendChatMessage}
           />
+        ) : null}
+        {receiptPreviewActionId ? (
+          <aside className="receipt-preview" aria-label="Перегляд чека">
+            <div className="receipt-preview-header">
+              <strong>Чек</strong>
+              <button className="ghost-button" type="button" onClick={() => setReceiptPreviewActionId(null)}>
+                Закрити
+              </button>
+            </div>
+            <iframe
+              className="receipt-preview-frame"
+              src={`${API_BASE_URL}/api/ai/actions/${receiptPreviewActionId}/receipt`}
+              title="Прикріплений чек"
+            />
+          </aside>
         ) : null}
 
         {activeTab === "edit" && isAdmin ? (
@@ -1320,6 +1403,7 @@ function App() {
 
 function AiChatPanel({
   actionBusyId,
+  categoryOptions,
   chatDraft,
   chatError,
   chatMessages,
@@ -1338,6 +1422,8 @@ function AiChatPanel({
   onConfirmAction,
   onCancelAction,
   onOpenFinance,
+  onResolveDraft,
+  onShowReceipt,
   onRetry,
   onSelectReceipt,
   onSubmit,
@@ -1407,6 +1493,9 @@ function AiChatPanel({
                 onCancel={onCancelAction}
                 onConfirm={onConfirmAction}
                 onOpenFinance={onOpenFinance}
+                categoryOptions={categoryOptions}
+                onResolveDraft={onResolveDraft}
+                onShowReceipt={onShowReceipt}
               />
             ) : null}
           </article>
@@ -1546,22 +1635,128 @@ function AiChatPanel({
   );
 }
 
-function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpenFinance }) {
-  if (action.status === "needs_clarification") {
-    return (
-      <div className="pending-action clarification-action">
-        <strong>Потрібне уточнення</strong>
-        <span>Надайте запитувану інформацію в наступному повідомленні. Ми повторно проаналізуємо цей чек.</span>
-        <button
-          className="ghost-button danger-button"
+function EditableReceiptDraft({ action, busy, categoryOptions, disabled, onCancel, onConfirm, onResolveDraft, onShowReceipt }) {
+  const transactions = action.draft_payload?.transactions || [];
+  const issues = action.draft_payload?.issues || [];
+  const hasIssues = action.status === "needs_clarification";
+  const [operationAt, setOperationAt] = useState(transactions[0]?.created_at?.slice(0, 16) || "");
+  const [rows, setRows] = useState(() => [
+    ...transactions.map((transaction, index) => ({
+      lineNumber: transaction.line_number || index + 1,
+      category: transaction.category,
+      amount: String(transaction.amount),
+      issue: false,
+    })),
+    ...issues.map((issue, index) => ({
+      lineNumber: issue.line_number || transactions.length + index + 1,
+      category: issue.category || "",
+      amount: issue.amount || "",
+      issue: true,
+    })),
+  ].sort((firstRow, secondRow) => firstRow.lineNumber - secondRow.lineNumber));
+
+  useEffect(() => {
+    setOperationAt(transactions[0]?.created_at?.slice(0, 16) || "");
+    setRows([
+      ...transactions.map((transaction, index) => ({
+        lineNumber: transaction.line_number || index + 1,
+        category: transaction.category,
+        amount: String(transaction.amount),
+        issue: false,
+      })),
+      ...issues.map((issue, index) => ({
+        lineNumber: issue.line_number || transactions.length + index + 1,
+        category: issue.category || "",
+        amount: issue.amount || "",
+        issue: true,
+      })),
+    ].sort((firstRow, secondRow) => firstRow.lineNumber - secondRow.lineNumber));
+  }, [action.id]);
+
+  const isComplete = operationAt && rows.every((row) => row.category.trim() && Number(row.amount) > 0);
+  const updateRow = (index, field, value) => {
+    setRows((previousRows) => previousRows.map((row, rowIndex) => (
+      rowIndex === index ? { ...row, [field]: value } : row
+    )));
+  };
+  const createDraftPayload = () => ({
+    operation_at: new Date(operationAt).toISOString(),
+    rows: rows.map((row) => ({
+      line_number: row.lineNumber,
+      category: row.category.trim(),
+      amount: Number(row.amount),
+    })),
+  });
+  const saveAndConfirm = async () => {
+    const saved = await onResolveDraft(action.id, createDraftPayload());
+    if (saved) {
+      onConfirm(action.id);
+    }
+  };
+
+  return (
+    <div className="pending-action clarification-action">
+      <label className="draft-operation-date">
+        Дата виконання операцій
+        <input
           disabled={disabled || busy}
+          type="datetime-local"
+          value={operationAt}
+          onChange={(event) => setOperationAt(event.target.value)}
+        />
+      </label>
+      <div className="draft-row draft-row-heading">
+        <span>п/н</span><span>Категорія товару</span><span>Сума</span>
+      </div>
+      <datalist id={`draft-category-options-${action.id}`}>
+        {categoryOptions.map((category) => <option key={category} value={category} />)}
+      </datalist>
+      {rows.map((row, index) => {
+        const isIssue = row.issue;
+        return (
+          <div className={`draft-row ${isIssue ? "draft-row-issue" : ""}`} key={index}>
+            <span>{row.lineNumber}</span>
+            <input
+              disabled={disabled || busy}
+              list={`draft-category-options-${action.id}`}
+              value={row.category}
+              onChange={(event) => updateRow(index, "category", event.target.value)}
+            />
+            <input
+              disabled={disabled || busy}
+              inputMode="decimal"
+              min="0.01"
+              step="0.01"
+              type="number"
+              value={row.amount}
+              onChange={(event) => updateRow(index, "amount", event.target.value)}
+            />
+          </div>
+        );
+      })}
+      <div className="pending-action-buttons draft-action-buttons">
+        <button className="receipt-button" disabled={disabled || busy} type="button" onClick={() => onShowReceipt(action.id)}>
+          Показати чек
+        </button>
+        <button
+          className="primary-button"
+          disabled={disabled || busy || !isComplete}
           type="button"
-          onClick={() => onCancel(action.id)}
+          onClick={() => (hasIssues ? onResolveDraft(action.id, createDraftPayload()) : saveAndConfirm())}
         >
-          Скасувати чернетку
+          Зберегти чернетку
+        </button>
+        <button className="ghost-button danger-button" disabled={disabled || busy} type="button" onClick={() => onCancel(action.id)}>
+          Скасувати
         </button>
       </div>
-    );
+    </div>
+  );
+}
+
+function PendingActionCard({ action, busy, categoryOptions, disabled, onCancel, onConfirm, onOpenFinance, onResolveDraft, onShowReceipt }) {
+  if (action.status === "needs_clarification" || action.status === "pending_confirmation") {
+    return <EditableReceiptDraft {...{ action, busy, categoryOptions, disabled, onCancel, onConfirm, onResolveDraft, onShowReceipt }} />;
   }
 
   if (action.status === "executed") {
@@ -1609,40 +1804,7 @@ function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpen
     );
   }
 
-  const transactions = action.draft_payload?.transactions || [];
-  return (
-    <div className="pending-action">
-      <strong>Можливі транзакції</strong>
-      <div className="pending-action-list">
-        {transactions.map((transaction, index) => (
-          <div className="pending-transaction" key={`${transaction.created_at}-${index}`}>
-            <span>{formatDate(transaction.created_at)}</span>
-            <span>{formatCurrency(transaction.amount)}</span>
-            <span>{transaction.category}</span>
-            <span className="tag expense">Витрата</span>
-          </div>
-        ))}
-      </div>
-      <div className="pending-action-buttons">
-        <button
-          className="primary-button"
-          disabled={disabled || busy}
-          type="button"
-          onClick={() => onConfirm(action.id)}
-        >
-          {busy ? "⌛ Виконуємо…" : "Підтвердити"}
-        </button>
-        <button
-          className="ghost-button danger-button"
-          disabled={disabled || busy}
-          type="button"
-          onClick={() => onCancel(action.id)}
-        >
-          Скасувати
-        </button>
-      </div>
-    </div>
-  );
+  return null;
 }
 
 function AnalysisCard({ title, children }) {
