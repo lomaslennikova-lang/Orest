@@ -450,7 +450,7 @@ h2 {
   align-items: start;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
   margin-top: 12px;
 }
 
