@@ -559,6 +559,12 @@ h2 {
   border-color: #4d9477;
 }
 
+.ai-chat-header-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
 .receipt-button:focus-visible {
   outline: 3px solid #c7e5d4;
   outline-offset: 2px;

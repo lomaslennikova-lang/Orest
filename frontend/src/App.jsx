@@ -413,6 +413,49 @@ function App() {
     setChatStatus("idle");
   }
 
+  async function handleStartNewChat() {
+    if (chatStatus === "loading" || analysisStatus === "loading" || actionBusyId !== null) {
+      return;
+    }
+
+    const hasOpenDraft = chatMessages.some((message) => (
+      OPEN_PENDING_ACTION_STATUSES.has(message.pendingAction?.status)
+    ));
+    if (hasOpenDraft) {
+      setChatError("Спершу підтвердьте або скасуйте поточну чернетку, щоб почати новий діалог.");
+      return;
+    }
+
+    if (!window.confirm("Почати новий порожній діалог? Попередня історія залишиться збереженою.")) {
+      return;
+    }
+
+    try {
+      setChatStatus("loading");
+      setChatError("");
+      const response = await fetch(`${API_BASE_URL}/api/ai/conversations`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error("Не вдалося почати новий діалог.");
+      }
+
+      const conversation = await response.json();
+      setChatConversationId(conversation.id);
+      setChatMessages([]);
+      setChatDraft("");
+      setReceiptFile(null);
+      setReceiptError("");
+      setLastChatMessage("");
+      setChatStatus("idle");
+    } catch (newChatError) {
+      setChatStatus("error");
+      setChatError(newChatError.message);
+    }
+  }
+
   function updateFilter(setFilter, name, value) {
     if (analysisStatus === "loading") {
       return;
@@ -1181,6 +1224,7 @@ function App() {
             onShowReceipt={setReceiptPreviewActionId}
             onSelectReceipt={selectReceiptFile}
             onRetry={() => sendChatMessage(lastChatMessage)}
+            onStartNewChat={handleStartNewChat}
             onSubmit={handleChatSubmit}
             onSuggestion={sendChatMessage}
           />
@@ -1425,6 +1469,7 @@ function AiChatPanel({
   onResolveDraft,
   onShowReceipt,
   onRetry,
+  onStartNewChat,
   onSelectReceipt,
   onSubmit,
   onSuggestion,
@@ -1440,6 +1485,7 @@ function AiChatPanel({
   const composerDisabled = isDisabled || hasPendingConfirmation;
   const selectionDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
   const hasChatMonths = chatMonthOptions.length > 0;
+  const newChatDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
   const chatHistoryRef = useRef(null);
   const receiptInputRef = useRef(null);
 
@@ -1464,7 +1510,17 @@ function AiChatPanel({
             Запитуйте про доходи, витрати, категорії та динаміку фінансових операцій.
           </p>
         </div>
-        {isLoading ? <span className="chat-status">AI-помічник аналізує…</span> : null}
+        <div className="ai-chat-header-actions">
+          {isLoading ? <span className="chat-status">AI-помічник аналізує…</span> : null}
+          <button
+            className="ghost-button"
+            disabled={newChatDisabled}
+            type="button"
+            onClick={onStartNewChat}
+          >
+            Очистити чат
+          </button>
+        </div>
       </div>
 
       <div className="chat-history" aria-live="polite" ref={chatHistoryRef}>

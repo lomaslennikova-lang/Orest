@@ -826,6 +826,28 @@ async def ai_chat(
     )
 
 
+@app.post(
+    "/api/ai/conversations",
+    response_model=ConversationView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_ai_conversation(
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ConversationView:
+    """Start a new empty chat without deleting the owner's previous history."""
+
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        conversation = await create_conversation(
+            session,
+            owner_user_id=admin_user.id,
+        )
+        await session.commit()
+        await session.refresh(conversation)
+
+    return serialize_conversation(conversation)
+
+
 @app.get("/api/ai/conversations/last", response_model=ConversationView)
 async def last_ai_conversation(
     admin_session: dict[str, object] = Depends(require_admin),
