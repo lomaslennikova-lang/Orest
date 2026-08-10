@@ -450,7 +450,7 @@ h2 {
   align-items: start;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 350px) minmax(0, 1fr) auto;
   margin-top: 12px;
 }
 
@@ -496,16 +496,55 @@ h2 {
 }
 
 .prompt-manager {
-  border-top: 1px solid #dde5e1;
-  margin-top: 14px;
-  padding-top: 12px;
+  align-self: end;
+  margin: 0;
+  min-width: max-content;
+  padding: 0;
+}
+
+.prompt-manager[open] {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .prompt-manager summary {
-  color: #146c5c;
+  align-items: center;
+  background: transparent;
+  border: 1px solid #cdd8d3;
+  border-radius: 999px;
+  color: #56635d;
   cursor: pointer;
+  display: flex;
   font-size: 13px;
   font-weight: 800;
+  gap: 8px;
+  justify-content: center;
+  list-style: none;
+  min-height: 40px;
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.prompt-manager summary:hover {
+  background: #f3f5f4;
+  border-color: #b9c8c1;
+}
+
+.prompt-manager summary::-webkit-details-marker {
+  display: none;
+}
+
+.prompt-manager summary::before {
+  content: "▸";
+  font-size: 16px;
+}
+
+.prompt-manager[open] summary::before {
+  content: "▾";
+}
+
+.prompt-manager[open] summary {
+  margin-bottom: 10px;
 }
 
 .prompt-manager p {

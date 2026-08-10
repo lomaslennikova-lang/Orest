@@ -1619,7 +1619,7 @@ function AiChatPanel({
           </select>
         </label>
         <label className="chat-prompt-select">
-          Спільна AI-підказка
+          Підказка
           <select
             disabled={selectionDisabled || !promptSuggestions.length}
             value={selectedSuggestionId}
@@ -1633,18 +1633,18 @@ function AiChatPanel({
             }}
           >
             <option value="">
-              {promptSuggestions.length ? "Оберіть підказку" : "Немає спільних підказок"}
+              {promptSuggestions.length ? "Оберіть підказку" : "Немає підказок"}
             </option>
             {promptSuggestions.map((suggestion) => (
-              <option key={suggestion.id} value={suggestion.id}>{suggestion.content}</option>
+              <option key={suggestion.id} value={suggestion.id}>
+                {formatPromptSuggestion(suggestion.content, chatMonth)}
+              </option>
             ))}
           </select>
         </label>
-      </div>
-
-      {isAdmin ? (
+        {isAdmin ? (
         <details className="prompt-manager">
-          <summary>Керувати спільними AI-підказками</summary>
+          <summary>Керувати підказками</summary>
           <p>Використовуйте <code>{"{{month}}"}</code>, щоб підставити вибраний місяць.</p>
           <form
             className="prompt-manager-form"
@@ -1689,7 +1689,7 @@ function AiChatPanel({
                   disabled={isDisabled || suggestionBusyId !== null}
                   type="button"
                   onClick={async () => {
-                    if (!window.confirm("Видалити цю AI-підказку?")) return;
+                    if (!window.confirm("Видалити цю підказку?")) return;
                     try {
                       setSuggestionBusyId(suggestion.id);
                       setSuggestionError("");
@@ -1707,7 +1707,8 @@ function AiChatPanel({
             ))}
           </ul>
         </details>
-      ) : null}
+        ) : null}
+      </div>
 
       {chatError ? (
         <div className="chat-error-row">
