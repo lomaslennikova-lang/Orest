@@ -477,27 +477,72 @@ h2 {
   outline: 3px solid #dcece8;
 }
 
-.chat-suggestion-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
+.chat-prompt-select {
+  color: #56635d;
+  display: grid;
+  font-size: 13px;
+  font-weight: 750;
+  gap: 6px;
 }
 
-.suggestion-button {
-  background: #ffffff;
-  border: 1px solid #bed8d1;
-  border-radius: 999px;
+.chat-prompt-select select,
+.prompt-manager-form input {
+  border: 1px solid #cdd8d3;
+  border-radius: 6px;
+  color: #1b2420;
+  min-width: 0;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.prompt-manager {
+  border-top: 1px solid #dde5e1;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.prompt-manager summary {
   color: #146c5c;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 1.3;
-  padding: 6px 9px;
-  text-align: left;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.suggestion-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
+.prompt-manager p {
+  color: #69766f;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.prompt-manager-form {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 10px;
+}
+
+.prompt-manager-list {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.prompt-manager-list li {
+  align-items: center;
+  background: #f8faf9;
+  border: 1px solid #dde5e1;
+  border-radius: 6px;
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 9px;
+}
+
+.prompt-manager-list span {
+  overflow-wrap: anywhere;
 }
 
 .chat-error-row {
@@ -1012,6 +1057,10 @@ th {
 
   .chat-suggestions,
   .chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-manager-form {
     grid-template-columns: 1fr;
   }
 

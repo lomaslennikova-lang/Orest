@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.api import app, create_ai_conversation
-from app.ai_chat.schemas import ChatRequest
+from app.ai_chat.schemas import ChatRequest, PromptSuggestionCreate
 
 
 class AIChatRouteTests(unittest.TestCase):
@@ -25,6 +25,8 @@ class AIChatRouteTests(unittest.TestCase):
                 "/api/ai/conversations",
                 "/api/ai/conversations/last",
                 "/api/ai/conversations/{conversation_id}/messages",
+                "/api/ai/prompt-suggestions",
+                "/api/ai/prompt-suggestions/{suggestion_id}",
                 "/api/admin/google-drive/connect",
                 "/api/admin/google-drive/callback",
             }
@@ -44,6 +46,13 @@ class AIChatRouteTests(unittest.TestCase):
                 attachment_id=uuid4(),
                 clarification_action_id=uuid4(),
             )
+
+    def test_prompt_suggestion_strips_whitespace_and_rejects_blank_content(self):
+        suggestion = PromptSuggestionCreate(content="  Покажи витрати за {{month}}.  ")
+        self.assertEqual(suggestion.content, "Покажи витрати за {{month}}.")
+
+        with self.assertRaises(ValidationError):
+            PromptSuggestionCreate(content="   ")
 
 
 class CreateAIConversationTests(unittest.IsolatedAsyncioTestCase):

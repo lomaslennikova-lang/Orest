@@ -111,6 +111,10 @@ function formatMonth(value) {
   }).format(new Date(`${value}-01T00:00:00`));
 }
 
+function formatPromptSuggestion(content, month) {
+  return content.replaceAll("{{month}}", formatMonth(month));
+}
+
 function getTransactionSummary(transactions) {
   return transactions.reduce(
     (summary, transaction) => {
@@ -178,9 +182,20 @@ function App() {
   const [receiptError, setReceiptError] = useState("");
   const [actionBusyId, setActionBusyId] = useState(null);
   const [receiptPreviewActionId, setReceiptPreviewActionId] = useState(null);
+  const [promptSuggestions, setPromptSuggestions] = useState([]);
 
   const isAdmin = currentUser?.role === "admin";
   const currentDateTimeLocal = getCurrentDateTimeLocal();
+
+  async function loadPromptSuggestions() {
+    const response = await fetch(`${API_BASE_URL}/api/ai/prompt-suggestions`, {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error("Не вдалося завантажити спільні AI-підказки.");
+    }
+    setPromptSuggestions(await response.json());
+  }
 
   useEffect(() => {
     document.title = `${appName} — адмінка`;
@@ -233,17 +248,6 @@ function App() {
 
   const isAiBusy =
     analysisStatus === "loading" || chatStatus === "loading" || actionBusyId !== null;
-
-  const chatSuggestions = useMemo(() => {
-    const month = formatMonth(chatMonth);
-    return [
-      `Покажи найбільші витрати за ${month}.`,
-      `Порівняй доходи й витрати за ${month}.`,
-      `Які категорії витрат найбільше вплинули на бюджет у ${month}?`,
-      `Чи були витрати вищими за доходи у ${month}?`,
-      `Покажи динаміку витрат за ${month}.`,
-    ];
-  }, [chatMonth]);
 
   async function loadDashboard() {
     try {
@@ -351,6 +355,7 @@ function App() {
         setError("");
         await loadDashboard();
         await loadLastChat();
+        await loadPromptSuggestions();
       } catch (loadError) {
         setStatus("error");
         setError(loadError.message);
@@ -392,6 +397,7 @@ function App() {
       }));
       await loadDashboard();
       await loadLastChat();
+      await loadPromptSuggestions();
     } catch (loginError) {
       setStatus("login");
       setError(loginError.message);
@@ -454,6 +460,34 @@ function App() {
       setChatStatus("error");
       setChatError(newChatError.message);
     }
+  }
+
+  async function handleCreatePromptSuggestion(content) {
+    const response = await fetch(`${API_BASE_URL}/api/ai/prompt-suggestions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.detail || "Не вдалося додати AI-підказку.");
+    }
+    const suggestion = await response.json();
+    setPromptSuggestions((previousSuggestions) => [suggestion, ...previousSuggestions]);
+  }
+
+  async function handleDeletePromptSuggestion(suggestionId) {
+    const response = await fetch(`${API_BASE_URL}/api/ai/prompt-suggestions/${suggestionId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error("Не вдалося видалити AI-підказку.");
+    }
+    setPromptSuggestions((previousSuggestions) => (
+      previousSuggestions.filter((suggestion) => suggestion.id !== suggestionId)
+    ));
   }
 
   function updateFilter(setFilter, name, value) {
@@ -1196,8 +1230,9 @@ function App() {
             chatMessages={chatMessages}
             chatMonth={chatMonth}
             chatMonthOptions={chatMonthOptions}
-            chatSuggestions={chatSuggestions}
+            promptSuggestions={promptSuggestions}
             chatStatus={chatStatus}
+            isAdmin={isAdmin}
             disabledByAnalysis={analysisStatus === "loading"}
             disabledByAction={actionBusyId !== null}
             lastChatMessage={lastChatMessage}
@@ -1225,6 +1260,8 @@ function App() {
             onSelectReceipt={selectReceiptFile}
             onRetry={() => sendChatMessage(lastChatMessage)}
             onStartNewChat={handleStartNewChat}
+            onCreatePromptSuggestion={handleCreatePromptSuggestion}
+            onDeletePromptSuggestion={handleDeletePromptSuggestion}
             onSubmit={handleChatSubmit}
             onSuggestion={sendChatMessage}
           />
@@ -1453,10 +1490,11 @@ function AiChatPanel({
   chatMessages,
   chatMonth,
   chatMonthOptions,
-  chatSuggestions,
+  promptSuggestions,
   chatStatus,
   disabledByAnalysis,
   disabledByAction,
+  isAdmin,
   lastChatMessage,
   receiptError,
   receiptFile,
@@ -1470,6 +1508,8 @@ function AiChatPanel({
   onShowReceipt,
   onRetry,
   onStartNewChat,
+  onCreatePromptSuggestion,
+  onDeletePromptSuggestion,
   onSelectReceipt,
   onSubmit,
   onSuggestion,
@@ -1486,6 +1526,10 @@ function AiChatPanel({
   const selectionDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
   const hasChatMonths = chatMonthOptions.length > 0;
   const newChatDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
+  const [selectedSuggestionId, setSelectedSuggestionId] = useState("");
+  const [newSuggestion, setNewSuggestion] = useState("");
+  const [suggestionError, setSuggestionError] = useState("");
+  const [suggestionBusyId, setSuggestionBusyId] = useState(null);
   const chatHistoryRef = useRef(null);
   const receiptInputRef = useRef(null);
 
@@ -1574,20 +1618,96 @@ function AiChatPanel({
             ))}
           </select>
         </label>
-        <div className="chat-suggestion-list" aria-label="Стартові підказки">
-          {chatSuggestions.map((suggestion) => (
-            <button
-              className="suggestion-button"
-              disabled={selectionDisabled || !hasChatMonths}
-              key={suggestion}
-              type="button"
-              onClick={() => onSuggestion(suggestion)}
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
+        <label className="chat-prompt-select">
+          Спільна AI-підказка
+          <select
+            disabled={selectionDisabled || !promptSuggestions.length}
+            value={selectedSuggestionId}
+            onChange={(event) => {
+              const suggestionId = Number(event.target.value);
+              setSelectedSuggestionId("");
+              const suggestion = promptSuggestions.find((item) => item.id === suggestionId);
+              if (suggestion) {
+                onSuggestion(formatPromptSuggestion(suggestion.content, chatMonth));
+              }
+            }}
+          >
+            <option value="">
+              {promptSuggestions.length ? "Оберіть підказку" : "Немає спільних підказок"}
+            </option>
+            {promptSuggestions.map((suggestion) => (
+              <option key={suggestion.id} value={suggestion.id}>{suggestion.content}</option>
+            ))}
+          </select>
+        </label>
       </div>
+
+      {isAdmin ? (
+        <details className="prompt-manager">
+          <summary>Керувати спільними AI-підказками</summary>
+          <p>Використовуйте <code>{"{{month}}"}</code>, щоб підставити вибраний місяць.</p>
+          <form
+            className="prompt-manager-form"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const content = newSuggestion.trim();
+              if (!content) return;
+              try {
+                setSuggestionBusyId("create");
+                setSuggestionError("");
+                await onCreatePromptSuggestion(content);
+                setNewSuggestion("");
+              } catch (requestError) {
+                setSuggestionError(requestError.message);
+              } finally {
+                setSuggestionBusyId(null);
+              }
+            }}
+          >
+            <input
+              disabled={isDisabled || suggestionBusyId !== null}
+              maxLength="2000"
+              placeholder="Наприклад: Покажи витрати за {{month}}."
+              value={newSuggestion}
+              onChange={(event) => setNewSuggestion(event.target.value)}
+            />
+            <button
+              className="primary-button"
+              disabled={isDisabled || suggestionBusyId !== null || !newSuggestion.trim()}
+              type="submit"
+            >
+              Додати
+            </button>
+          </form>
+          {suggestionError ? <div className="notice">{suggestionError}</div> : null}
+          <ul className="prompt-manager-list">
+            {promptSuggestions.map((suggestion) => (
+              <li key={suggestion.id}>
+                <span>{suggestion.content}</span>
+                <button
+                  className="danger-button"
+                  disabled={isDisabled || suggestionBusyId !== null}
+                  type="button"
+                  onClick={async () => {
+                    if (!window.confirm("Видалити цю AI-підказку?")) return;
+                    try {
+                      setSuggestionBusyId(suggestion.id);
+                      setSuggestionError("");
+                      await onDeletePromptSuggestion(suggestion.id);
+                    } catch (requestError) {
+                      setSuggestionError(requestError.message);
+                    } finally {
+                      setSuggestionBusyId(null);
+                    }
+                  }}
+                >
+                  Видалити
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
 
       {chatError ? (
         <div className="chat-error-row">

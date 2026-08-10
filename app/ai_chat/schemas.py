@@ -133,6 +133,26 @@ class ConversationView(BaseModel):
     updated_at: datetime
 
 
+class PromptSuggestionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content must not be blank")
+        return normalized
+
+
+class PromptSuggestionView(BaseModel):
+    id: int
+    content: str
+    created_at: datetime
+
+
 class ChatResponse(BaseModel):
     conversation_id: UUID
     message: ChatMessageView

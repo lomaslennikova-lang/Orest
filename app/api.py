@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from app.ai_actions.audit import AuditLogWriter
 from app.ai_actions.pending import (
@@ -64,10 +65,18 @@ from app.ai_chat.repository import (
     get_owned_conversation,
     get_recent_messages,
 )
-from app.ai_chat.schemas import ChatMessageCreate, ChatMessageView, ChatRequest, ChatResponse, ConversationView
+from app.ai_chat.schemas import (
+    ChatMessageCreate,
+    ChatMessageView,
+    ChatRequest,
+    ChatResponse,
+    ConversationView,
+    PromptSuggestionCreate,
+    PromptSuggestionView,
+)
 from app.database import AsyncSessionLocal, check_database_connection, init_database
 from app.llm import LLMRequestError, analyze_transactions
-from app.models import AIPendingAction, AIReceiptAttachment, Category, Transaction, User
+from app.models import AIPendingAction, AIPromptSuggestion, AIReceiptAttachment, Category, Transaction, User
 from app.google_drive import (
     GoogleDriveConfigurationError,
     GoogleDriveOAuthError,
@@ -374,6 +383,14 @@ def serialize_conversation(conversation) -> ConversationView:
         owner_user_id=conversation.owner_user_id,
         title=conversation.title,
         updated_at=conversation.updated_at,
+    )
+
+
+def serialize_prompt_suggestion(suggestion: AIPromptSuggestion) -> PromptSuggestionView:
+    return PromptSuggestionView(
+        id=suggestion.id,
+        content=suggestion.content,
+        created_at=suggestion.created_at,
     )
 
 
@@ -861,6 +878,64 @@ async def last_ai_conversation(
         if not conversation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found.")
         return serialize_conversation(conversation)
+
+
+@app.get("/api/ai/prompt-suggestions", response_model=list[PromptSuggestionView])
+async def list_ai_prompt_suggestions(
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> list[PromptSuggestionView]:
+    async with AsyncSessionLocal() as session:
+        await get_admin_chat_user(session, admin_session)
+        suggestions = (
+            await session.scalars(
+                select(AIPromptSuggestion).order_by(
+                    AIPromptSuggestion.created_at.desc(),
+                    AIPromptSuggestion.id.desc(),
+                )
+            )
+        ).all()
+    return [serialize_prompt_suggestion(suggestion) for suggestion in suggestions]
+
+
+@app.post(
+    "/api/ai/prompt-suggestions",
+    response_model=PromptSuggestionView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_ai_prompt_suggestion(
+    payload: PromptSuggestionCreate,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> PromptSuggestionView:
+    async with AsyncSessionLocal() as session:
+        await get_admin_chat_user(session, admin_session)
+        suggestion = AIPromptSuggestion(content=payload.content)
+        session.add(suggestion)
+        try:
+            await session.commit()
+        except IntegrityError as error:
+            await session.rollback()
+            logger.warning("Could not create AI prompt suggestion: %s", error)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Така підказка вже існує.",
+            ) from error
+        await session.refresh(suggestion)
+    return serialize_prompt_suggestion(suggestion)
+
+
+@app.delete("/api/ai/prompt-suggestions/{suggestion_id}")
+async def delete_ai_prompt_suggestion(
+    suggestion_id: int,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> dict[str, str]:
+    async with AsyncSessionLocal() as session:
+        await get_admin_chat_user(session, admin_session)
+        suggestion = await session.get(AIPromptSuggestion, suggestion_id)
+        if not suggestion:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Підказку не знайдено.")
+        await session.delete(suggestion)
+        await session.commit()
+    return {"status": "ok"}
 
 
 @app.get(
