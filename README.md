@@ -161,8 +161,16 @@ DELETE /api/transactions/{transaction_id}
 POST /api/ai/analyze-transactions
 POST /api/ai/attachments
 GET /api/ai/actions/{action_id}
+GET /api/ai/actions/{action_id}/receipt
+PUT /api/ai/actions/{action_id}/draft
 POST /api/ai/actions/{action_id}/confirm
 POST /api/ai/actions/{action_id}/cancel
+POST /api/ai/conversations
+GET /api/ai/conversations/last
+GET /api/ai/conversations/{conversation_id}/messages
+GET /api/ai/prompt-suggestions
+POST /api/ai/prompt-suggestions
+DELETE /api/ai/prompt-suggestions/{suggestion_id}
 ```
 
 ## Налагодження
@@ -211,8 +219,14 @@ GEMINI_MODEL=gemini-flash-latest
 ### AI-помічник
 
 На окремій вкладці `AI-помічник` доступний чат для запитів про доходи, витрати,
-категорії та їхню динаміку. Він пропонує запити для обраного місяця, зберігає
-останній діалог (до 50 повідомлень) і відновлює його після оновлення сторінки.
+категорії та їхню динаміку. Він зберігає активний діалог (до 50 повідомлень)
+і відновлює його після оновлення сторінки. Кнопка `Очистити чат` створює новий
+порожній діалог, не видаляючи попередню історію.
+
+Підказки для чату зберігаються спільно в БД та обираються з dropdown. Адміністратор
+може додавати й видаляти їх у панелі `Керувати підказками`. У тексті підказки
+можна використовувати `{{month}}`: перед надсиланням він автоматично замінюється
+на вибраний місяць.
 Для поточного admin діє обмеження: не більше 10 звернень до AI-помічника за
 60 секунд. У разі перевищення API повертає `429 Too Many Requests` і заголовок
 `Retry-After`. Ліміт зберігається в пам'яті поточного API-процесу, що відповідає
@@ -292,6 +306,9 @@ alembic/
     20260726_01_add_ai_chat_tables.py
     20260730_02_add_ai_receipt_actions.py
     20260730_03_add_ai_action_execution_result.py
+    20260804_04_add_google_drive_receipt_metadata.py
+    20260809_05_add_ai_prompt_suggestions.py
+    20260809_06_seed_ai_prompt_suggestions.py
 promts/
   financial_analysis_gemini.md
   template.md

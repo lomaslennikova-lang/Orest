@@ -98,6 +98,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2_000)
     conversation_id: UUID | None = None
     attachment_id: UUID | None = None
+    clarification_action_id: UUID | None = None
 
     @field_validator("message")
     @classmethod
@@ -106,6 +107,12 @@ class ChatRequest(BaseModel):
         if not normalized:
             raise ValueError("message must not be blank")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_attachment_source(self) -> "ChatRequest":
+        if self.attachment_id and self.clarification_action_id:
+            raise ValueError("attachment_id and clarification_action_id cannot be used together")
+        return self
 
 
 class ChatMessageView(BaseModel):
@@ -124,6 +131,26 @@ class ConversationView(BaseModel):
     owner_user_id: int
     title: str | None = None
     updated_at: datetime
+
+
+class PromptSuggestionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content must not be blank")
+        return normalized
+
+
+class PromptSuggestionView(BaseModel):
+    id: int
+    content: str
+    created_at: datetime
 
 
 class ChatResponse(BaseModel):

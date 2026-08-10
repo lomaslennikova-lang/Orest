@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
@@ -21,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from app.ai_actions.audit import AuditLogWriter
 from app.ai_actions.pending import (
@@ -28,12 +30,14 @@ from app.ai_actions.pending import (
     PendingActionExpiredError,
     PendingActionNotFoundError,
     PendingActionStateError,
+    ClarificationActionDraft,
     ExpenseActionDraft,
     cancel_pending_action,
     confirm_pending_action,
     create_clarification_action,
     create_pending_expense_action,
     expire_open_actions_for_new_message,
+    update_pending_action_draft,
 )
 from app.ai_actions.receipt_llm import ReceiptDraftLLMError, analyse_receipt_to_draft
 from app.ai_actions.receipts import MAX_RECEIPT_BYTES, ReceiptStorageRouter, ReceiptValidationError
@@ -42,6 +46,7 @@ from app.ai_actions.schemas import (
     ActionCancelResponse,
     ActionConfirmResponse,
     PendingActionView,
+    PendingDraftUpdate,
     ReceiptAttachmentView,
 )
 from app.ai_actions.transactions import (
@@ -60,10 +65,18 @@ from app.ai_chat.repository import (
     get_owned_conversation,
     get_recent_messages,
 )
-from app.ai_chat.schemas import ChatMessageCreate, ChatMessageView, ChatRequest, ChatResponse, ConversationView
+from app.ai_chat.schemas import (
+    ChatMessageCreate,
+    ChatMessageView,
+    ChatRequest,
+    ChatResponse,
+    ConversationView,
+    PromptSuggestionCreate,
+    PromptSuggestionView,
+)
 from app.database import AsyncSessionLocal, check_database_connection, init_database
 from app.llm import LLMRequestError, analyze_transactions
-from app.models import AIPendingAction, AIReceiptAttachment, Category, Transaction, User
+from app.models import AIPendingAction, AIPromptSuggestion, AIReceiptAttachment, Category, Transaction, User
 from app.google_drive import (
     GoogleDriveConfigurationError,
     GoogleDriveOAuthError,
@@ -71,6 +84,9 @@ from app.google_drive import (
     exchange_code,
     get_google_drive_settings,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -100,7 +116,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -370,6 +386,14 @@ def serialize_conversation(conversation) -> ConversationView:
     )
 
 
+def serialize_prompt_suggestion(suggestion: AIPromptSuggestion) -> PromptSuggestionView:
+    return PromptSuggestionView(
+        id=suggestion.id,
+        content=suggestion.content,
+        created_at=suggestion.created_at,
+    )
+
+
 def serialize_receipt_attachment(attachment: AIReceiptAttachment) -> ReceiptAttachmentView:
     return ReceiptAttachmentView(
         id=attachment.id,
@@ -489,6 +513,81 @@ async def get_ai_action(
         return serialize_pending_action(action)
 
 
+@app.put("/api/ai/actions/{action_id}/draft", response_model=PendingActionView)
+async def update_ai_action_draft(
+    action_id: UUID,
+    payload: PendingDraftUpdate,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> PendingActionView:
+    action_error: PendingActionError | None = None
+    action = None
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            admin_user = await get_admin_chat_user(session, admin_session)
+            draft = ExpenseActionDraft(
+                transactions=[
+                    {
+                        "created_at": payload.operation_at,
+                        "amount": row.amount,
+                        "category": row.category,
+                        "line_number": row.line_number,
+                    }
+                    for row in payload.rows
+                ]
+            )
+            try:
+                action = await update_pending_action_draft(
+                    session,
+                    action_id=action_id,
+                    owner_user_id=admin_user.id,
+                    draft=draft,
+                )
+            except (PendingActionNotFoundError, PendingActionExpiredError, PendingActionStateError) as error:
+                # Keep an expired state written by the action service instead of
+                # rolling it back by raising from inside the transaction.
+                action_error = error
+        if action_error:
+            raise _pending_action_http_error(action_error)
+    assert action is not None
+    return serialize_pending_action(action)
+
+
+@app.get("/api/ai/actions/{action_id}/receipt")
+async def get_ai_action_receipt(
+    action_id: UUID,
+    request: Request,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> Response:
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        action = await session.scalar(
+            select(AIPendingAction).where(
+                AIPendingAction.id == action_id,
+                AIPendingAction.owner_user_id == admin_user.id,
+            )
+        )
+        if not action or not action.attachment_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чек не знайдено.")
+        attachment = await session.scalar(
+            select(AIReceiptAttachment).where(
+                AIReceiptAttachment.id == action.attachment_id,
+                AIReceiptAttachment.owner_user_id == admin_user.id,
+            )
+        )
+        if not attachment or attachment.expires_at <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail="Строк зберігання чеку минув.")
+        content = await asyncio.to_thread(
+            request.app.state.receipt_storage.read,
+            attachment.storage_key,
+            attachment.drive_file_id,
+        )
+    return Response(
+        content=content,
+        media_type=attachment.media_type,
+        headers={"Content-Disposition": f'inline; filename="{attachment.original_filename}"'},
+    )
+
+
 @app.post("/api/ai/actions/{action_id}/confirm", response_model=ActionConfirmResponse)
 async def confirm_ai_action(
     action_id: UUID,
@@ -574,6 +673,8 @@ async def ai_chat(
         )
 
     attachment_meta: tuple[str, str | None, str, str] | None = None
+    action_attachment_id: UUID | None = payload.attachment_id
+    is_clarification_retry = payload.clarification_action_id is not None
     admin_user_id: int
     async with AsyncSessionLocal() as session:
         admin_user = await get_admin_chat_user(session, admin_session)
@@ -596,10 +697,23 @@ async def ai_chat(
                     owner_user_id=admin_user.id,
                 )
 
-        if payload.attachment_id:
+        if payload.clarification_action_id:
+            clarification_action = await session.scalar(
+                select(AIPendingAction).where(
+                    AIPendingAction.id == payload.clarification_action_id,
+                    AIPendingAction.conversation_id == conversation.id,
+                    AIPendingAction.owner_user_id == admin_user.id,
+                    AIPendingAction.status == "needs_clarification",
+                )
+            )
+            if not clarification_action or not clarification_action.attachment_id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Чернетка вже недоступна для уточнення.")
+            action_attachment_id = clarification_action.attachment_id
+
+        if action_attachment_id:
             attachment = await session.scalar(
                 select(AIReceiptAttachment).where(
-                    AIReceiptAttachment.id == payload.attachment_id,
+                    AIReceiptAttachment.id == action_attachment_id,
                     AIReceiptAttachment.owner_user_id == admin_user.id,
                 )
             )
@@ -614,11 +728,12 @@ async def ai_chat(
                 attachment.original_filename,
             )
 
-        await expire_open_actions_for_new_message(
-            session,
-            conversation_id=conversation.id,
-            owner_user_id=admin_user.id,
-        )
+        if not is_clarification_retry:
+            await expire_open_actions_for_new_message(
+                session,
+                conversation_id=conversation.id,
+                owner_user_id=admin_user.id,
+            )
 
         await add_message(
             session,
@@ -630,7 +745,7 @@ async def ai_chat(
         await session.commit()
 
     pending_action = None
-    if attachment_meta is not None and payload.attachment_id is not None:
+    if attachment_meta is not None and action_attachment_id is not None:
         storage_key, drive_file_id, media_type, filename = attachment_meta
         try:
             content = await asyncio.to_thread(
@@ -645,6 +760,7 @@ async def ai_chat(
                 user_message=payload.message,
             )
         except (RuntimeError, ReceiptDraftLLMError) as error:
+            logger.warning("Receipt analysis failed: %s", error)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Не вдалося проаналізувати чек. Спробуйте ще раз трохи згодом.",
@@ -653,6 +769,12 @@ async def ai_chat(
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         try:
             async with AsyncSessionLocal() as session:
+                if is_clarification_retry:
+                    await expire_open_actions_for_new_message(
+                        session,
+                        conversation_id=conversation_id,
+                        owner_user_id=admin_user_id,
+                    )
                 if receipt_turn.result.status == "pending_confirmation":
                     pending_action = await create_pending_expense_action(
                         session,
@@ -661,7 +783,7 @@ async def ai_chat(
                         draft=ExpenseActionDraft(
                             transactions=receipt_turn.result.transactions,
                         ),
-                        attachment_id=payload.attachment_id,
+                        attachment_id=action_attachment_id,
                         expires_at=expires_at,
                     )
                 else:
@@ -669,8 +791,11 @@ async def ai_chat(
                         session,
                         conversation_id=conversation_id,
                         owner_user_id=admin_user_id,
-                        clarification=receipt_turn.result.message,
-                        attachment_id=payload.attachment_id,
+                        draft=ClarificationActionDraft(
+                            transactions=receipt_turn.result.transactions,
+                            issues=receipt_turn.result.issues,
+                        ),
+                        attachment_id=action_attachment_id,
                         expires_at=expires_at,
                     )
                 await session.commit()
@@ -718,6 +843,28 @@ async def ai_chat(
     )
 
 
+@app.post(
+    "/api/ai/conversations",
+    response_model=ConversationView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_ai_conversation(
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> ConversationView:
+    """Start a new empty chat without deleting the owner's previous history."""
+
+    async with AsyncSessionLocal() as session:
+        admin_user = await get_admin_chat_user(session, admin_session)
+        conversation = await create_conversation(
+            session,
+            owner_user_id=admin_user.id,
+        )
+        await session.commit()
+        await session.refresh(conversation)
+
+    return serialize_conversation(conversation)
+
+
 @app.get("/api/ai/conversations/last", response_model=ConversationView)
 async def last_ai_conversation(
     admin_session: dict[str, object] = Depends(require_admin),
@@ -731,6 +878,64 @@ async def last_ai_conversation(
         if not conversation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found.")
         return serialize_conversation(conversation)
+
+
+@app.get("/api/ai/prompt-suggestions", response_model=list[PromptSuggestionView])
+async def list_ai_prompt_suggestions(
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> list[PromptSuggestionView]:
+    async with AsyncSessionLocal() as session:
+        await get_admin_chat_user(session, admin_session)
+        suggestions = (
+            await session.scalars(
+                select(AIPromptSuggestion).order_by(
+                    AIPromptSuggestion.created_at.desc(),
+                    AIPromptSuggestion.id.desc(),
+                )
+            )
+        ).all()
+    return [serialize_prompt_suggestion(suggestion) for suggestion in suggestions]
+
+
+@app.post(
+    "/api/ai/prompt-suggestions",
+    response_model=PromptSuggestionView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_ai_prompt_suggestion(
+    payload: PromptSuggestionCreate,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> PromptSuggestionView:
+    async with AsyncSessionLocal() as session:
+        await get_admin_chat_user(session, admin_session)
+        suggestion = AIPromptSuggestion(content=payload.content)
+        session.add(suggestion)
+        try:
+            await session.commit()
+        except IntegrityError as error:
+            await session.rollback()
+            logger.warning("Could not create AI prompt suggestion: %s", error)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Така підказка вже існує.",
+            ) from error
+        await session.refresh(suggestion)
+    return serialize_prompt_suggestion(suggestion)
+
+
+@app.delete("/api/ai/prompt-suggestions/{suggestion_id}")
+async def delete_ai_prompt_suggestion(
+    suggestion_id: int,
+    admin_session: dict[str, object] = Depends(require_admin),
+) -> dict[str, str]:
+    async with AsyncSessionLocal() as session:
+        await get_admin_chat_user(session, admin_session)
+        suggestion = await session.get(AIPromptSuggestion, suggestion_id)
+        if not suggestion:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Підказку не знайдено.")
+        await session.delete(suggestion)
+        await session.commit()
+    return {"status": "ok"}
 
 
 @app.get(

@@ -128,6 +128,20 @@ class AIConversation(Base):
     )
 
 
+class AIPromptSuggestion(Base):
+    """A reusable AI-chat prompt shared by all application users."""
+
+    __tablename__ = "ai_prompt_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    content: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class AIMessage(Base):
     """A persisted user, assistant, or internal tool message in a chat thread."""
 

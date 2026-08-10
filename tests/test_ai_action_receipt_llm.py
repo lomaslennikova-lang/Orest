@@ -37,13 +37,29 @@ class ReceiptDraftParsingTests(unittest.TestCase):
         self.assertEqual(turn.result.status, "pending_confirmation")
         self.assertEqual(turn.result.transactions[0].type, "expense")
 
-    def test_parses_clarification_without_transactions(self):
+    def test_parses_partial_draft_with_clarification_issues(self):
         turn = _parse_receipt_response(
             gemini_json_response(
-                '{"status":"needs_clarification","message":"Вкажіть суму в UAH.","transactions":[]}'
+                '''{
+                    "status":"needs_clarification",
+                    "message":"Потрібно уточнити одну позицію.",
+                    "transactions":[{
+                        "created_at":"2026-07-01T10:30:00Z",
+                        "amount":"123.45",
+                        "category":"Продукти",
+                        "type":"expense"
+                    }],
+                    "issues":[{
+                        "line_number":2,
+                        "category":null,
+                        "amount":"200.00"
+                    }]
+                }'''
             )
         )
         self.assertEqual(turn.result.status, "needs_clarification")
+        self.assertEqual(len(turn.result.transactions), 1)
+        self.assertEqual(turn.result.issues[0].line_number, 2)
 
     def test_preserves_a_separate_transaction_for_each_receipt_position(self):
         turn = _parse_receipt_response(
@@ -69,7 +85,7 @@ class ReceiptDraftParsingTests(unittest.TestCase):
     def test_rejects_income_unknown_fields_and_incomplete_draft(self):
         for payload in (
             '{"status":"pending_confirmation","message":"x","transactions":[]}',
-            '{"status":"needs_clarification","message":"x","transactions":[{"created_at":"2026-07-01T00:00:00Z","amount":"1","category":"Food","type":"expense"}]}',
+            '{"status":"needs_clarification","message":"x","transactions":[]}',
             '{"status":"pending_confirmation","message":"x","transactions":[{"created_at":"2026-07-01T00:00:00Z","amount":"1","category":"Food","type":"income"}]}',
             '{"status":"needs_clarification","message":"x","transactions":[],"secret":"no"}',
         ):
@@ -91,7 +107,8 @@ class ReceiptDraftRetryTests(unittest.TestCase):
                                         "text": (
                                             '{"status":"needs_clarification",'
                                             '"message":"Вкажіть суму.",'
-                                            '"transactions":[]}'
+                                            '"transactions":[],"issues":[{'
+                                            '"line_number":1,"category":null,"amount":null}]}'
                                         )
                                     }
                                 ]

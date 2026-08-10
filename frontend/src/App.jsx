@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (
   import.meta.env.DEV ? "http://localhost:8000" : ""
 );
+const appVariant = (import.meta.env.VITE_APP_VARIANT ?? (
+  import.meta.env.DEV ? "local" : "web"
+)).trim().toLowerCase();
+const appName = appVariant === "local" ? "Orest Local" : "Orest Web";
 
 const currencyFormatter = new Intl.NumberFormat("uk-UA", {
   style: "currency",
@@ -13,14 +17,6 @@ const dateFormatter = new Intl.DateTimeFormat("uk-UA", {
   dateStyle: "medium",
   timeStyle: "short",
 });
-
-const statusLabels = {
-  checking: "перевірка",
-  loading: "завантаження",
-  ready: "готово",
-  error: "помилка",
-  login: "вхід",
-};
 
 const typeLabels = {
   income: "Дохід",
@@ -48,6 +44,10 @@ const RECEIPT_ACCEPTED_TYPES = new Set([
 ]);
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 const RECEIPT_DEFAULT_MESSAGE = "Проаналізуй прикріплений чек і підготуй чернетку витрати.";
+const OPEN_PENDING_ACTION_STATUSES = new Set([
+  "needs_clarification",
+  "pending_confirmation",
+]);
 
 function formatCurrency(value) {
   return currencyFormatter.format(Number(value || 0));
@@ -109,6 +109,10 @@ function formatMonth(value) {
     month: "long",
     year: "numeric",
   }).format(new Date(`${value}-01T00:00:00`));
+}
+
+function formatPromptSuggestion(content, month) {
+  return content.replaceAll("{{month}}", formatMonth(month));
 }
 
 function getTransactionSummary(transactions) {
@@ -177,9 +181,25 @@ function App() {
   const [receiptFile, setReceiptFile] = useState(null);
   const [receiptError, setReceiptError] = useState("");
   const [actionBusyId, setActionBusyId] = useState(null);
+  const [receiptPreviewActionId, setReceiptPreviewActionId] = useState(null);
+  const [promptSuggestions, setPromptSuggestions] = useState([]);
 
   const isAdmin = currentUser?.role === "admin";
   const currentDateTimeLocal = getCurrentDateTimeLocal();
+
+  async function loadPromptSuggestions() {
+    const response = await fetch(`${API_BASE_URL}/api/ai/prompt-suggestions`, {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error("Не вдалося завантажити спільні AI-підказки.");
+    }
+    setPromptSuggestions(await response.json());
+  }
+
+  useEffect(() => {
+    document.title = `${appName} — адмінка`;
+  }, []);
 
   const userOptions = useMemo(() => {
     return [...new Set(transactions.map((transaction) => transaction.user))].sort(
@@ -214,39 +234,20 @@ function App() {
   );
 
   const chatMonthOptions = useMemo(() => {
-    const transactionDates = transactions
+    return [...new Set(transactions
       .map((transaction) => getDateKey(transaction.created_at))
       .filter(Boolean)
-      .sort();
-    const firstMonth = transactionDates[0]?.slice(0, 7) || getCurrentMonth();
-    const lastMonth = getCurrentMonth();
-    const months = [];
-    const cursor = new Date(`${firstMonth}-01T00:00:00`);
-    const last = new Date(`${lastMonth}-01T00:00:00`);
-
-    while (cursor <= last) {
-      months.push(
-        `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`,
-      );
-      cursor.setMonth(cursor.getMonth() + 1);
-    }
-
-    return months.reverse();
+      .map((date) => date.slice(0, 7)))].sort().reverse();
   }, [transactions]);
+
+  useEffect(() => {
+    setChatMonth((previousMonth) => (
+      chatMonthOptions.includes(previousMonth) ? previousMonth : (chatMonthOptions[0] || "")
+    ));
+  }, [chatMonthOptions]);
 
   const isAiBusy =
     analysisStatus === "loading" || chatStatus === "loading" || actionBusyId !== null;
-
-  const chatSuggestions = useMemo(() => {
-    const month = formatMonth(chatMonth);
-    return [
-      `Покажи найбільші витрати за ${month}.`,
-      `Порівняй доходи й витрати за ${month}.`,
-      `Які категорії витрат найбільше вплинули на бюджет у ${month}?`,
-      `Чи були витрати вищими за доходи у ${month}?`,
-      `Покажи динаміку витрат за ${month}.`,
-    ];
-  }, [chatMonth]);
 
   async function loadDashboard() {
     try {
@@ -354,6 +355,7 @@ function App() {
         setError("");
         await loadDashboard();
         await loadLastChat();
+        await loadPromptSuggestions();
       } catch (loadError) {
         setStatus("error");
         setError(loadError.message);
@@ -395,6 +397,7 @@ function App() {
       }));
       await loadDashboard();
       await loadLastChat();
+      await loadPromptSuggestions();
     } catch (loginError) {
       setStatus("login");
       setError(loginError.message);
@@ -414,6 +417,77 @@ function App() {
     setChatDraft("");
     setChatError("");
     setChatStatus("idle");
+  }
+
+  async function handleStartNewChat() {
+    if (chatStatus === "loading" || analysisStatus === "loading" || actionBusyId !== null) {
+      return;
+    }
+
+    const hasOpenDraft = chatMessages.some((message) => (
+      OPEN_PENDING_ACTION_STATUSES.has(message.pendingAction?.status)
+    ));
+    if (hasOpenDraft) {
+      setChatError("Спершу підтвердьте або скасуйте поточну чернетку, щоб почати новий діалог.");
+      return;
+    }
+
+    if (!window.confirm("Почати новий порожній діалог? Попередня історія залишиться збереженою.")) {
+      return;
+    }
+
+    try {
+      setChatStatus("loading");
+      setChatError("");
+      const response = await fetch(`${API_BASE_URL}/api/ai/conversations`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error("Не вдалося почати новий діалог.");
+      }
+
+      const conversation = await response.json();
+      setChatConversationId(conversation.id);
+      setChatMessages([]);
+      setChatDraft("");
+      setReceiptFile(null);
+      setReceiptError("");
+      setLastChatMessage("");
+      setChatStatus("idle");
+    } catch (newChatError) {
+      setChatStatus("error");
+      setChatError(newChatError.message);
+    }
+  }
+
+  async function handleCreatePromptSuggestion(content) {
+    const response = await fetch(`${API_BASE_URL}/api/ai/prompt-suggestions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ content }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.detail || "Не вдалося додати AI-підказку.");
+    }
+    const suggestion = await response.json();
+    setPromptSuggestions((previousSuggestions) => [suggestion, ...previousSuggestions]);
+  }
+
+  async function handleDeletePromptSuggestion(suggestionId) {
+    const response = await fetch(`${API_BASE_URL}/api/ai/prompt-suggestions/${suggestionId}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      throw new Error("Не вдалося видалити AI-підказку.");
+    }
+    setPromptSuggestions((previousSuggestions) => (
+      previousSuggestions.filter((suggestion) => suggestion.id !== suggestionId)
+    ));
   }
 
   function updateFilter(setFilter, name, value) {
@@ -613,7 +687,18 @@ function App() {
       setReceiptError("Розмір чеку не може перевищувати 5 МіБ.");
       return;
     }
+
+    const openDraft = chatMessages.find((message) => (
+      OPEN_PENDING_ACTION_STATUSES.has(message.pendingAction?.status)
+    ));
+    if (openDraft && !window.confirm(
+      "Є чернетка, яка ще очікує на обробку. Після надсилання нового чека вона стане недоступною. Проігнорувати її та продовжити?",
+    )) {
+      return;
+    }
+
     setReceiptFile(file);
+    setChatDraft((previousDraft) => previousDraft.trim() || RECEIPT_DEFAULT_MESSAGE);
   }
 
   async function uploadReceipt(file) {
@@ -672,6 +757,11 @@ function App() {
       setChatMessages((previousMessages) => [...previousMessages, pendingMessage]);
 
       const uploadedReceipt = file ? await uploadReceipt(file) : null;
+      const clarificationAction = file
+        ? null
+        : chatMessages.find((chatMessage) => (
+          chatMessage.pendingAction?.status === "needs_clarification"
+        ))?.pendingAction;
 
       const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
         method: "POST",
@@ -681,6 +771,7 @@ function App() {
           message: normalizedMessage,
           conversation_id: chatConversationId,
           attachment_id: uploadedReceipt?.id || null,
+          clarification_action_id: clarificationAction?.id || null,
         }),
       });
 
@@ -706,11 +797,18 @@ function App() {
         setReceiptFile(null);
       }
       setChatMessages((previousMessages) => [
-        ...previousMessages.map((chatMessage) =>
-          chatMessage.id === pendingMessage.id
-            ? { ...chatMessage, pending: false }
-            : chatMessage,
-        ),
+        ...previousMessages.map((chatMessage) => {
+          if (chatMessage.id === pendingMessage.id) {
+            return { ...chatMessage, pending: false };
+          }
+          if (OPEN_PENDING_ACTION_STATUSES.has(chatMessage.pendingAction?.status)) {
+            return {
+              ...chatMessage,
+              pendingAction: { ...chatMessage.pendingAction, status: "expired" },
+            };
+          }
+          return chatMessage;
+        }),
         pendingAction ? { ...data.message, pendingAction } : data.message,
       ]);
       setChatStatus("idle");
@@ -749,6 +847,20 @@ function App() {
         } catch {
           // Keep the safe fallback when the API response has no JSON body.
         }
+        if (response.status === 409 || response.status === 410) {
+          try {
+            const refreshedAction = await getPendingAction(actionId);
+            setChatMessages((previousMessages) =>
+              previousMessages.map((chatMessage) => (
+                chatMessage.pendingAction?.id === actionId
+                  ? { ...chatMessage, pendingAction: refreshedAction }
+                  : chatMessage
+              )),
+            );
+          } catch {
+            // Keep the original action error when its refreshed state is unavailable.
+          }
+        }
         throw new Error(message);
       }
       const result = await response.json();
@@ -777,6 +889,50 @@ function App() {
     }
   }
 
+  async function handleResolveDraft(actionId, draft) {
+    try {
+      setActionBusyId(actionId);
+      const response = await fetch(`${API_BASE_URL}/api/ai/actions/${actionId}/draft`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(draft),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 409 || response.status === 410) {
+          try {
+            const refreshedAction = await getPendingAction(actionId);
+            setChatMessages((messages) => messages.map((message) => (
+              message.pendingAction?.id === actionId
+                ? { ...message, pendingAction: refreshedAction }
+                : message
+            )));
+            // The updated card explains why the draft is unavailable; do not
+            // repeat the same state as a global chat error.
+            setChatError("");
+            return false;
+          } catch {
+            // Keep the original error when the action state cannot be refreshed.
+          }
+        }
+        throw new Error(data.detail || "Не вдалося оновити чернетку.");
+      }
+      const updatedAction = await response.json();
+      setChatMessages((messages) => messages.map((message) => (
+        message.pendingAction?.id === actionId
+          ? { ...message, pendingAction: updatedAction }
+          : message
+      )));
+      return true;
+    } catch (draftError) {
+      setChatError(draftError.message);
+      return false;
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
   function openFinanceAfterAction() {
     setActiveTab("finance");
     loadDashboard();
@@ -789,7 +945,7 @@ function App() {
           <div className="brand login-brand">
             <div className="brand-mark">O</div>
             <div>
-              <div className="brand-name">Orest</div>
+              <div className="brand-name">{appName}</div>
               <div className="brand-subtitle">Адмінка</div>
             </div>
           </div>
@@ -839,7 +995,7 @@ function App() {
         <div className="brand">
           <div className="brand-mark">O</div>
           <div>
-            <div className="brand-name">Orest</div>
+            <div className="brand-name">{appName}</div>
             <div className="brand-subtitle">Адмінка</div>
           </div>
         </div>
@@ -871,6 +1027,12 @@ function App() {
             </button>
           ) : null}
         </nav>
+
+        <div className="sidebar-footer">
+          <button className="sidebar-logout" type="button" onClick={handleLogout}>
+            <span aria-hidden="true">↪</span> Вийти
+          </button>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -890,14 +1052,6 @@ function App() {
                   ? "Запитуйте про доходи, витрати, категорії та динаміку"
                   : "Дані станом на поточний момент"}
             </p>
-          </div>
-          <div className="topbar-actions">
-            <span className={`pill ${status}`}>
-              {statusLabels[status] || status}
-            </span>
-            <button className="ghost-button" type="button" onClick={handleLogout}>
-              Вийти
-            </button>
           </div>
         </header>
 
@@ -1076,28 +1230,56 @@ function App() {
             chatMessages={chatMessages}
             chatMonth={chatMonth}
             chatMonthOptions={chatMonthOptions}
-            chatSuggestions={chatSuggestions}
+            promptSuggestions={promptSuggestions}
             chatStatus={chatStatus}
+            isAdmin={isAdmin}
             disabledByAnalysis={analysisStatus === "loading"}
             disabledByAction={actionBusyId !== null}
             lastChatMessage={lastChatMessage}
             receiptError={receiptError}
             receiptFile={receiptFile}
             actionBusyId={actionBusyId}
+            categoryOptions={categoryOptions}
             onChangeDraft={setChatDraft}
             onChangeMonth={setChatMonth}
             onClearReceipt={() => {
               setReceiptFile(null);
               setReceiptError("");
             }}
-            onConfirmAction={(actionId) => handlePendingAction(actionId, "confirm")}
-            onCancelAction={(actionId) => handlePendingAction(actionId, "cancel")}
+            onConfirmAction={(actionId) => {
+              setReceiptPreviewActionId(null);
+              handlePendingAction(actionId, "confirm");
+            }}
+            onCancelAction={(actionId) => {
+              setReceiptPreviewActionId(null);
+              handlePendingAction(actionId, "cancel");
+            }}
             onOpenFinance={openFinanceAfterAction}
+            onResolveDraft={handleResolveDraft}
+            onShowReceipt={setReceiptPreviewActionId}
             onSelectReceipt={selectReceiptFile}
             onRetry={() => sendChatMessage(lastChatMessage)}
+            onStartNewChat={handleStartNewChat}
+            onCreatePromptSuggestion={handleCreatePromptSuggestion}
+            onDeletePromptSuggestion={handleDeletePromptSuggestion}
             onSubmit={handleChatSubmit}
             onSuggestion={sendChatMessage}
           />
+        ) : null}
+        {receiptPreviewActionId ? (
+          <aside className="receipt-preview" aria-label="Перегляд чека">
+            <div className="receipt-preview-header">
+              <strong>Чек</strong>
+              <button className="ghost-button" type="button" onClick={() => setReceiptPreviewActionId(null)}>
+                Закрити
+              </button>
+            </div>
+            <iframe
+              className="receipt-preview-frame"
+              src={`${API_BASE_URL}/api/ai/actions/${receiptPreviewActionId}/receipt`}
+              title="Прикріплений чек"
+            />
+          </aside>
         ) : null}
 
         {activeTab === "edit" && isAdmin ? (
@@ -1302,15 +1484,17 @@ function App() {
 
 function AiChatPanel({
   actionBusyId,
+  categoryOptions,
   chatDraft,
   chatError,
   chatMessages,
   chatMonth,
   chatMonthOptions,
-  chatSuggestions,
+  promptSuggestions,
   chatStatus,
   disabledByAnalysis,
   disabledByAction,
+  isAdmin,
   lastChatMessage,
   receiptError,
   receiptFile,
@@ -1320,13 +1504,32 @@ function AiChatPanel({
   onConfirmAction,
   onCancelAction,
   onOpenFinance,
+  onResolveDraft,
+  onShowReceipt,
   onRetry,
+  onStartNewChat,
+  onCreatePromptSuggestion,
+  onDeletePromptSuggestion,
   onSelectReceipt,
   onSubmit,
   onSuggestion,
 }) {
   const isLoading = chatStatus === "loading";
   const isDisabled = isLoading || disabledByAnalysis || disabledByAction;
+  const hasPendingConfirmation = chatMessages.some((message) => (
+    message.pendingAction?.status === "pending_confirmation"
+  ));
+  const hasClarificationRequest = chatMessages.some((message) => (
+    message.pendingAction?.status === "needs_clarification"
+  ));
+  const composerDisabled = isDisabled || hasPendingConfirmation;
+  const selectionDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
+  const hasChatMonths = chatMonthOptions.length > 0;
+  const newChatDisabled = isDisabled || hasPendingConfirmation || hasClarificationRequest;
+  const [selectedSuggestionId, setSelectedSuggestionId] = useState("");
+  const [newSuggestion, setNewSuggestion] = useState("");
+  const [suggestionError, setSuggestionError] = useState("");
+  const [suggestionBusyId, setSuggestionBusyId] = useState(null);
   const chatHistoryRef = useRef(null);
   const receiptInputRef = useRef(null);
 
@@ -1351,7 +1554,17 @@ function AiChatPanel({
             Запитуйте про доходи, витрати, категорії та динаміку фінансових операцій.
           </p>
         </div>
-        {isLoading ? <span className="chat-status">AI-помічник аналізує…</span> : null}
+        <div className="ai-chat-header-actions">
+          {isLoading ? <span className="chat-status">AI-помічник аналізує…</span> : null}
+          <button
+            className="ghost-button"
+            disabled={newChatDisabled}
+            type="button"
+            onClick={onStartNewChat}
+          >
+            Очистити чат
+          </button>
+        </div>
       </div>
 
       <div className="chat-history" aria-live="polite" ref={chatHistoryRef}>
@@ -1380,6 +1593,9 @@ function AiChatPanel({
                 onCancel={onCancelAction}
                 onConfirm={onConfirmAction}
                 onOpenFinance={onOpenFinance}
+                categoryOptions={categoryOptions}
+                onResolveDraft={onResolveDraft}
+                onShowReceipt={onShowReceipt}
               />
             ) : null}
           </article>
@@ -1390,10 +1606,11 @@ function AiChatPanel({
         <label className="chat-month-select">
           Місяць для підказок
           <select
-            disabled={isDisabled}
+            disabled={selectionDisabled || !hasChatMonths}
             value={chatMonth}
             onChange={(event) => onChangeMonth(event.target.value)}
           >
+            {!hasChatMonths ? <option value="">Немає місяців із даними</option> : null}
             {chatMonthOptions.map((month) => (
               <option key={month} value={month}>
                 {formatMonth(month)}
@@ -1401,19 +1618,96 @@ function AiChatPanel({
             ))}
           </select>
         </label>
-        <div className="chat-suggestion-list" aria-label="Стартові підказки">
-          {chatSuggestions.map((suggestion) => (
+        <label className="chat-prompt-select">
+          Підказка
+          <select
+            disabled={selectionDisabled || !promptSuggestions.length}
+            value={selectedSuggestionId}
+            onChange={(event) => {
+              const suggestionId = Number(event.target.value);
+              setSelectedSuggestionId("");
+              const suggestion = promptSuggestions.find((item) => item.id === suggestionId);
+              if (suggestion) {
+                onSuggestion(formatPromptSuggestion(suggestion.content, chatMonth));
+              }
+            }}
+          >
+            <option value="">
+              {promptSuggestions.length ? "Оберіть підказку" : "Немає підказок"}
+            </option>
+            {promptSuggestions.map((suggestion) => (
+              <option key={suggestion.id} value={suggestion.id}>
+                {formatPromptSuggestion(suggestion.content, chatMonth)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {isAdmin ? (
+        <details className="prompt-manager">
+          <summary>Керувати підказками</summary>
+          <p>Використовуйте <code>{"{{month}}"}</code>, щоб підставити вибраний місяць.</p>
+          <form
+            className="prompt-manager-form"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              const content = newSuggestion.trim();
+              if (!content) return;
+              try {
+                setSuggestionBusyId("create");
+                setSuggestionError("");
+                await onCreatePromptSuggestion(content);
+                setNewSuggestion("");
+              } catch (requestError) {
+                setSuggestionError(requestError.message);
+              } finally {
+                setSuggestionBusyId(null);
+              }
+            }}
+          >
+            <input
+              disabled={isDisabled || suggestionBusyId !== null}
+              maxLength="2000"
+              placeholder="Наприклад: Покажи витрати за {{month}}."
+              value={newSuggestion}
+              onChange={(event) => setNewSuggestion(event.target.value)}
+            />
             <button
-              className="suggestion-button"
-              disabled={isDisabled}
-              key={suggestion}
-              type="button"
-              onClick={() => onSuggestion(suggestion)}
+              className="primary-button"
+              disabled={isDisabled || suggestionBusyId !== null || !newSuggestion.trim()}
+              type="submit"
             >
-              {suggestion}
+              Додати
             </button>
-          ))}
-        </div>
+          </form>
+          {suggestionError ? <div className="notice">{suggestionError}</div> : null}
+          <ul className="prompt-manager-list">
+            {promptSuggestions.map((suggestion) => (
+              <li key={suggestion.id}>
+                <span>{suggestion.content}</span>
+                <button
+                  className="danger-button"
+                  disabled={isDisabled || suggestionBusyId !== null}
+                  type="button"
+                  onClick={async () => {
+                    if (!window.confirm("Видалити цю підказку?")) return;
+                    try {
+                      setSuggestionBusyId(suggestion.id);
+                      setSuggestionError("");
+                      await onDeletePromptSuggestion(suggestion.id);
+                    } catch (requestError) {
+                      setSuggestionError(requestError.message);
+                    } finally {
+                      setSuggestionBusyId(null);
+                    }
+                  }}
+                >
+                  Видалити
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+        ) : null}
       </div>
 
       {chatError ? (
@@ -1438,6 +1732,18 @@ function AiChatPanel({
         </p>
       ) : null}
 
+      {hasPendingConfirmation ? (
+        <p className="chat-blocking-message">
+          Спершу підтвердьте або скасуйте поточну чернетку, щоб продовжити діалог.
+        </p>
+      ) : null}
+
+      {hasClarificationRequest ? (
+        <p className="chat-blocking-message">
+          Дайте текстове уточнення для поточного чека. Новий чек і швидкі підказки тимчасово недоступні.
+        </p>
+      ) : null}
+
       {receiptError ? <div className="notice chat-receipt-error">{receiptError}</div> : null}
 
       {receiptFile ? (
@@ -1459,7 +1765,7 @@ function AiChatPanel({
           Повідомлення для AI-помічника
         </label>
         <textarea
-          disabled={isDisabled}
+          disabled={composerDisabled}
           id="ai-chat-message"
           maxLength="2000"
           placeholder="Наприклад: які витрати були найбільшими цього місяця?"
@@ -1477,7 +1783,7 @@ function AiChatPanel({
           <input
             accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
             className="sr-only"
-            disabled={isDisabled}
+            disabled={selectionDisabled}
             ref={receiptInputRef}
             type="file"
             onChange={(event) => {
@@ -1486,8 +1792,8 @@ function AiChatPanel({
             }}
           />
           <button
-            className="ghost-button receipt-button"
-            disabled={isDisabled}
+            className="receipt-button"
+            disabled={selectionDisabled}
             type="button"
             onClick={() => receiptInputRef.current?.click()}
           >
@@ -1495,7 +1801,7 @@ function AiChatPanel({
           </button>
           <button
             className="primary-button"
-            disabled={isDisabled || (!chatDraft.trim() && !receiptFile)}
+            disabled={composerDisabled || (!chatDraft.trim() && !receiptFile)}
             type="submit"
           >
             {isLoading ? "⌛ Надсилаємо…" : "Надіслати"}
@@ -1506,14 +1812,128 @@ function AiChatPanel({
   );
 }
 
-function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpenFinance }) {
-  if (action.status === "needs_clarification") {
-    return (
-      <div className="pending-action clarification-action">
-        <strong>Потрібне уточнення</strong>
-        <span>Надайте запитувану інформацію в наступному повідомленні разом із цим чеком.</span>
+function EditableReceiptDraft({ action, busy, categoryOptions, disabled, onCancel, onConfirm, onResolveDraft, onShowReceipt }) {
+  const transactions = action.draft_payload?.transactions || [];
+  const issues = action.draft_payload?.issues || [];
+  const hasIssues = action.status === "needs_clarification";
+  const [operationAt, setOperationAt] = useState(transactions[0]?.created_at?.slice(0, 16) || "");
+  const [rows, setRows] = useState(() => [
+    ...transactions.map((transaction, index) => ({
+      lineNumber: transaction.line_number || index + 1,
+      category: transaction.category,
+      amount: String(transaction.amount),
+      issue: false,
+    })),
+    ...issues.map((issue, index) => ({
+      lineNumber: issue.line_number || transactions.length + index + 1,
+      category: issue.category || "",
+      amount: issue.amount || "",
+      issue: true,
+    })),
+  ].sort((firstRow, secondRow) => firstRow.lineNumber - secondRow.lineNumber));
+
+  useEffect(() => {
+    setOperationAt(transactions[0]?.created_at?.slice(0, 16) || "");
+    setRows([
+      ...transactions.map((transaction, index) => ({
+        lineNumber: transaction.line_number || index + 1,
+        category: transaction.category,
+        amount: String(transaction.amount),
+        issue: false,
+      })),
+      ...issues.map((issue, index) => ({
+        lineNumber: issue.line_number || transactions.length + index + 1,
+        category: issue.category || "",
+        amount: issue.amount || "",
+        issue: true,
+      })),
+    ].sort((firstRow, secondRow) => firstRow.lineNumber - secondRow.lineNumber));
+  }, [action.id]);
+
+  const isComplete = operationAt && rows.every((row) => row.category.trim() && Number(row.amount) > 0);
+  const updateRow = (index, field, value) => {
+    setRows((previousRows) => previousRows.map((row, rowIndex) => (
+      rowIndex === index ? { ...row, [field]: value } : row
+    )));
+  };
+  const createDraftPayload = () => ({
+    operation_at: new Date(operationAt).toISOString(),
+    rows: rows.map((row) => ({
+      line_number: row.lineNumber,
+      category: row.category.trim(),
+      amount: Number(row.amount),
+    })),
+  });
+  const saveAndConfirm = async () => {
+    const saved = await onResolveDraft(action.id, createDraftPayload());
+    if (saved) {
+      onConfirm(action.id);
+    }
+  };
+
+  return (
+    <div className="pending-action clarification-action">
+      <label className="draft-operation-date">
+        Дата виконання операцій
+        <input
+          disabled={disabled || busy}
+          type="datetime-local"
+          value={operationAt}
+          onChange={(event) => setOperationAt(event.target.value)}
+        />
+      </label>
+      <div className="draft-row draft-row-heading">
+        <span>п/н</span><span>Категорія товару</span><span>Сума</span>
       </div>
-    );
+      <datalist id={`draft-category-options-${action.id}`}>
+        {categoryOptions.map((category) => <option key={category} value={category} />)}
+      </datalist>
+      {rows.map((row, index) => {
+        const isIssue = row.issue;
+        return (
+          <div className={`draft-row ${isIssue ? "draft-row-issue" : ""}`} key={index}>
+            <span>{row.lineNumber}</span>
+            <input
+              disabled={disabled || busy}
+              list={`draft-category-options-${action.id}`}
+              value={row.category}
+              onChange={(event) => updateRow(index, "category", event.target.value)}
+            />
+            <input
+              disabled={disabled || busy}
+              inputMode="decimal"
+              min="0.01"
+              step="0.01"
+              type="number"
+              value={row.amount}
+              onChange={(event) => updateRow(index, "amount", event.target.value)}
+            />
+          </div>
+        );
+      })}
+      <div className="pending-action-buttons draft-action-buttons">
+        <button className="receipt-button" disabled={disabled || busy} type="button" onClick={() => onShowReceipt(action.id)}>
+          Показати чек
+        </button>
+        <button
+          className="primary-button"
+          disabled={disabled || busy || !isComplete}
+          type="button"
+          onClick={() => (hasIssues ? onResolveDraft(action.id, createDraftPayload()) : saveAndConfirm())}
+        >
+          Зберегти чернетку
+        </button>
+        <button className="ghost-button danger-button" disabled={disabled || busy} type="button" onClick={() => onCancel(action.id)}>
+          Скасувати
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PendingActionCard({ action, busy, categoryOptions, disabled, onCancel, onConfirm, onOpenFinance, onResolveDraft, onShowReceipt }) {
+  if (action.status === "needs_clarification" || action.status === "pending_confirmation") {
+    return <EditableReceiptDraft {...{ action, busy, categoryOptions, disabled, onCancel, onConfirm, onResolveDraft, onShowReceipt }} />;
   }
 
   if (action.status === "executed") {
@@ -1538,47 +1958,30 @@ function PendingActionCard({ action, busy, disabled, onCancel, onConfirm, onOpen
   }
 
   if (action.status === "cancelled" || action.status === "expired" || action.status === "failed") {
+    const unavailableDraft = {
+      cancelled: {
+        title: "Чернетку скасовано",
+        description: "Її більше не можна обробити.",
+      },
+      expired: {
+        title: "Термін обробки чернетки минув",
+        description: "Створіть нову чернетку, щоб продовжити.",
+      },
+      failed: {
+        title: "Не вдалося обробити чернетку",
+        description: "Створіть нову чернетку та спробуйте ще раз.",
+      },
+    }[action.status];
+
     return (
       <div className="pending-action cancelled-action">
-        <strong>{action.status === "cancelled" ? "Дію скасовано" : "Чернетка недоступна"}</strong>
+        <strong>{unavailableDraft.title}</strong>
+        <span>{unavailableDraft.description}</span>
       </div>
     );
   }
 
-  const transactions = action.draft_payload?.transactions || [];
-  return (
-    <div className="pending-action">
-      <strong>Можливі транзакції</strong>
-      <div className="pending-action-list">
-        {transactions.map((transaction, index) => (
-          <div className="pending-transaction" key={`${transaction.created_at}-${index}`}>
-            <span>{formatDate(transaction.created_at)}</span>
-            <span>{formatCurrency(transaction.amount)}</span>
-            <span>{transaction.category}</span>
-            <span className="tag expense">Витрата</span>
-          </div>
-        ))}
-      </div>
-      <div className="pending-action-buttons">
-        <button
-          className="primary-button"
-          disabled={disabled || busy}
-          type="button"
-          onClick={() => onConfirm(action.id)}
-        >
-          {busy ? "⌛ Виконуємо…" : "Підтвердити"}
-        </button>
-        <button
-          className="ghost-button danger-button"
-          disabled={disabled || busy}
-          type="button"
-          onClick={() => onCancel(action.id)}
-        >
-          Скасувати
-        </button>
-      </div>
-    </div>
-  );
+  return null;
 }
 
 function AnalysisCard({ title, children }) {
