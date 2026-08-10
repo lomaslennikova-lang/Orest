@@ -8,6 +8,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert
 
 
 revision: str = "20260809_06"
@@ -31,9 +32,10 @@ prompt_suggestions = sa.table(
 
 
 def upgrade() -> None:
-    op.bulk_insert(
-        prompt_suggestions,
-        [{"content": content} for content in PROMPT_SUGGESTIONS],
+    op.get_bind().execute(
+        insert(prompt_suggestions)
+        .values([{"content": content} for content in PROMPT_SUGGESTIONS])
+        .on_conflict_do_nothing(index_elements=["content"]),
     )
 
 
