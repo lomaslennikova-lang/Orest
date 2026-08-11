@@ -16,6 +16,7 @@ Current system documentation:
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — durable project decisions;
 - [`docs/TESTING.md`](docs/TESTING.md) — verification policy;
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — stable deployment model;
+- [`docs/maintenance.md`](docs/maintenance.md) — maintenance, smoke tests, and rollback guide;
 - [`docs/TASK_TEMPLATE.md`](docs/TASK_TEMPLATE.md) — everyday Vibe-coding task templates.
 
 ## Telegram bot quick start
