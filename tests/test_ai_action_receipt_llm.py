@@ -137,7 +137,7 @@ class ReceiptDraftRetryTests(unittest.TestCase):
             io.BytesIO(),
         )
         with (
-            patch.dict("os.environ", {"LLM_API_KEY": "test-key"}, clear=False),
+            patch.dict("os.environ", {"LLM_API_KEY": "test-key"}, clear=False),  # pragma: allowlist secret
             patch(
                 "app.ai_actions.receipt_llm.urlopen",
                 side_effect=[unavailable, self.valid_response()],
