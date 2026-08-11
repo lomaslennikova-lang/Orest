@@ -1,5 +1,9 @@
 # Database
 
+> **Historical learning document.**
+> This file describes the initial database-design stage before the database was connected.
+> Current structure is defined by the code/models/migrations and `docs/ARCHITECTURE.md`.
+
 ## Схема фінансового бота
 
 Цей документ описує першу модель бази даних для фінансових функцій у Telegram-боті.

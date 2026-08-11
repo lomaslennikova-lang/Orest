@@ -1,10 +1,24 @@
 <img src="https://github.com/lomaslennikova-lang/Orest/blob/main/Orest.png" width="200">
 
-# Orest Telegram Bot
+# Orest
 
-Каркас Telegram-бота на Python.
+Orest is a learning financial application developed through Vibe Coding.
+It currently includes a Telegram bot, React/Vite web admin interface, FastAPI backend, PostgreSQL/Neon persistence, Gemini-based AI analysis/chat, and confirmable AI receipt write-actions.
 
-## Швидкий старт
+## Project documentation
+
+For AI agents, start with [`AGENTS.md`](AGENTS.md).
+
+Current system documentation:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — current structure and data flows;
+- [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) — stable API behavior;
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — durable project decisions;
+- [`docs/TESTING.md`](docs/TESTING.md) — verification policy;
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — stable deployment model;
+- [`docs/TASK_TEMPLATE.md`](docs/TASK_TEMPLATE.md) — everyday Vibe-coding task templates.
+
+## Telegram bot quick start
 
 1. Створіть файл `.env` на основі прикладу:
 
@@ -49,7 +63,7 @@ docker compose up --build
 
 ## Розгортання в Render та реєстрація DNS
 
-Production-версія застосунку розгортається як один Render Web Service: `Dockerfile.render` збирає React frontend, а FastAPI віддає SPA, `/api/*` та `/health` з одного HTTPS-домену.
+Deployed web/demo version of the application runs as one Render Web Service: `Dockerfile.render` builds the React frontend, while FastAPI serves the SPA, `/api/*`, and `/health` from one HTTPS domain. The current Render Free environment is a demo, not production-grade infrastructure.
 
 - Детальна інструкція: [docs/deploy.md](docs/deploy.md).
 - Результат підключення власного домену: [docs/domain.md](docs/domain.md).
@@ -159,6 +173,7 @@ GET /api/transactions
 POST /api/transactions
 DELETE /api/transactions/{transaction_id}
 POST /api/ai/analyze-transactions
+POST /api/ai/chat
 POST /api/ai/attachments
 GET /api/ai/actions/{action_id}
 GET /api/ai/actions/{action_id}/receipt
@@ -178,6 +193,14 @@ DELETE /api/ai/prompt-suggestions/{suggestion_id}
 Файл `docs/DEBUG.md` містить історію помилок, які виникали під час запуску бота, та їхні виправлення. Для кожної ситуації там вказано команду запуску, текст помилки, причину та спосіб виправлення.
 
 ## Перевірка секретів
+
+Run the full cross-platform preflight before a commit or deployment:
+
+```bash
+python scripts/preflight.py
+```
+
+It verifies Python compilation, the React production build, the `Dockerfile.render` image build, secret scanning, critical configuration files, and that `.env` is not tracked by Git. Confirmed false positives are recorded in `.secrets.baseline`.
 
 Для пошуку випадково доданих токенів, паролів або інших секретів використовується `detect-secrets`.
 

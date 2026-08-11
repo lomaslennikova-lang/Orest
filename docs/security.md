@@ -11,7 +11,11 @@
 - паролі;
 - API keys.
 
-Секрети потрібно зберігати тільки локально у файлі `.env`.
+Store secrets according to the runtime where they are used:
+
+- local runtime secrets → `.env`;
+- deployed runtime secrets → Render Environment Variables / secret settings;
+- repository template → `.env.example` only, with no real values.
 
 У GitHub треба додавати лише `.env.example`, де є назви змінних без реальних значень:
 

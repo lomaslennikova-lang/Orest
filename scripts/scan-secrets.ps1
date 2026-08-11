@@ -18,7 +18,7 @@ try {
     Pop-Location
 }
 
-$gitFiles = @($gitFiles | Where-Object { $_ -ne ".env.example" })
+$gitFiles = @($gitFiles | Where-Object { $_ -notin @(".env.example", ".secrets.baseline") })
 
 if ($gitFiles.Count -eq 0) {
     Write-Output "Secrets found: 0"
@@ -33,9 +33,27 @@ try {
 }
 $scan = $scanJson | ConvertFrom-Json
 $findings = @()
+$baselinePath = Join-Path $projectRoot ".secrets.baseline"
+
+if (-not (Test-Path $baselinePath)) {
+    throw ".secrets.baseline is required for acknowledged false positives."
+}
+
+$baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json
+$acknowledgedFalsePositives = @{}
+foreach ($file in @($baseline.results.PSObject.Properties)) {
+    foreach ($finding in @($file.Value)) {
+        if ($finding.is_secret -eq $false) {
+            $acknowledgedFalsePositives["$($finding.filename)|$($finding.hashed_secret)"] = $true
+        }
+    }
+}
 
 foreach ($file in @($scan.results.PSObject.Properties)) {
     foreach ($finding in @($file.Value)) {
+        if ($acknowledgedFalsePositives.ContainsKey("$($finding.filename)|$($finding.hashed_secret)")) {
+            continue
+        }
         $findings += [PSCustomObject]@{
             Filename = $finding.filename
             LineNumber = $finding.line_number

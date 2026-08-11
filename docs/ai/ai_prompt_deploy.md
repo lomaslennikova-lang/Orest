@@ -104,7 +104,7 @@ CORS для production або передавати URL API в коді React. Co
    платного тарифу та окремого рішення для файлів і backup.
 5. У **Environment** додати секретні змінні вручну:
    `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`,
-   `ADMIN_SESSION_SECRET`, `LLM_API_KEY`; за потреби — несекретні
+   `ADMIN_SESSION_SECRET`, `LLM_API_KEY`; <!-- pragma: allowlist secret --> за потреби — несекретні
    `GEMINI_MODEL`, retention-параметри та production-ознаку середовища.
    Значення `PORT` зазвичай задає Render; не фіксувати його у Git.
 6. Установити HTTP health check path: `/health`.
