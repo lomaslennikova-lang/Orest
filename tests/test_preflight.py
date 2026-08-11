@@ -56,6 +56,9 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("Secret scan: FAILED", stderr.getvalue())
         self.assertIn("Preflight: FAILED", stderr.getvalue())
 
+    def test_normalized_path_is_platform_independent(self) -> None:
+        self.assertEqual(preflight.normalized_path(r"docs\API_CONTRACTS.md"), "docs/API_CONTRACTS.md")
+
     @unittest.skipUnless(preflight.sys.platform == "win32", "Windows-specific command resolution")
     def test_frontend_build_uses_npm_cmd_on_windows(self) -> None:
         completed = subprocess.CompletedProcess([], 0, "", "")

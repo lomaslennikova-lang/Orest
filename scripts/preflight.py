@@ -33,6 +33,10 @@ class PreflightError(RuntimeError):
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+def normalized_path(path: str) -> str:
+    return path.replace("\\", "/")
+
+
 def resolve_command(name: str) -> str | None:
     candidates = (f"{name}.cmd", name) if name == "npm" and sys.platform == "win32" else (name,)
     for candidate in candidates:
@@ -89,7 +93,7 @@ def acknowledged_false_positives(repo_root: Path) -> set[tuple[str, str]]:
     for findings in baseline.get("results", {}).values():
         for finding in findings:
             if finding.get("is_secret") is False:
-                acknowledged.add((finding["filename"], finding["hashed_secret"]))
+                acknowledged.add((normalized_path(finding["filename"]), finding["hashed_secret"]))
     return acknowledged
 
 
@@ -132,7 +136,7 @@ def check_secret_scan(repo_root: Path) -> None:
         filename: [
             finding
             for finding in file_findings
-            if (finding["filename"], finding["hashed_secret"]) not in acknowledged
+            if (normalized_path(finding["filename"]), finding["hashed_secret"]) not in acknowledged
         ]
         for filename, file_findings in findings.items()
     }
