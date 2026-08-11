@@ -229,6 +229,14 @@ Runtime smoke should use safe development/test configuration only.
 
 ## 4. Universal Git preflight
 
+For a cross-platform pre-commit/deployment check, run:
+
+```bash
+python scripts/preflight.py
+```
+
+The script stops at the first failed stage and verifies Python compilation, the frontend production build, the `Dockerfile.render` image build, secret scanning, critical configuration files, and that `.env` is not tracked by Git. Confirmed false positives are recorded in `.secrets.baseline`.
+
 For every code task, before completion:
 
 ```bash

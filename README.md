@@ -194,6 +194,14 @@ DELETE /api/ai/prompt-suggestions/{suggestion_id}
 
 ## Перевірка секретів
 
+Run the full cross-platform preflight before a commit or deployment:
+
+```bash
+python scripts/preflight.py
+```
+
+It verifies Python compilation, the React production build, the `Dockerfile.render` image build, secret scanning, critical configuration files, and that `.env` is not tracked by Git. Confirmed false positives are recorded in `.secrets.baseline`.
+
 Для пошуку випадково доданих токенів, паролів або інших секретів використовується `detect-secrets`.
 
 Встановіть або оновіть залежності:
