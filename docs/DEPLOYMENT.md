@@ -58,6 +58,17 @@ Do not assume production-grade:
 
 The current deployment model uses one Render Web Service.
 
+### CI and deployment are separate
+
+GitHub Actions runs the repository preflight on pull requests targeting `main`
+and after pushes to `main`. It verifies code and build inputs only: Python
+compilation, the React production build, the Render Docker image build, secret
+scanning, and critical configuration files.
+
+The workflow does not deploy to Render and receives no production secrets.
+Render independently observes new commits on `main` and performs its own
+deployment according to its configured service settings.
+
 ---
 
 ## 3. Deployment topology
