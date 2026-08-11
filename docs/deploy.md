@@ -1,5 +1,10 @@
 # Розгортання Orest у Render
 
+> **Operational deployment runbook.**
+> This file contains current human-facing Render/DNS/OAuth steps.
+> For stable deployment architecture and agent-facing deployment rules, see `docs/DEPLOYMENT.md`.
+> Verify current branch, domain, DNS targets, provider/model values, and callback URLs before applying them.
+
 ## Призначення
 
 Цей документ описує розгортання web-частини Orest як одного Render Web Service.
@@ -133,7 +138,7 @@ AI-чаті. У Render Logs дивитися лише HTTP-коди, deploy SHA 
 | `503` від Gemini | Тимчасова недоступність провайдера, timeout або перевантаження. | Повторити пізніше; retry має бути обмеженим. |
 | `503` AI-чату при доступному `/health` | Може бути тимчасово недоступний LangGraph checkpointer у Neon. | Перевірити application logs і не змішувати цю помилку з quota Gemini. |
 | `401` `/api/me` | Немає або завершилась cookie-сесія. | Увійти знову; без сесії це очікувана відповідь. |
-| Receipt upload/AI дія працює лише тимчасово | Free Render не зберігає локальні файли. | Не вважати upload-и сталими; наступний етап — приватне зовнішнє сховище. |
+| Receipt upload/AI action loses a locally stored file after restart/redeploy | Free Render local filesystem is ephemeral, or Google Drive storage is not fully configured for that attachment. | Treat local files as temporary. For durable receipt storage, verify the private Google Drive integration and its Environment Variables; existing legacy local attachments remain local. |
 
 ## Обмеження Free Render
 
